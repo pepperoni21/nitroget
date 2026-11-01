@@ -1,7 +1,4 @@
 //! Reconciliation between the desired widget set and the running windows.
-//!
-//! The decision logic is a pure function (`decide`) so every transition can be
-//! unit tested without a display.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;

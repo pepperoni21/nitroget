@@ -31,8 +31,6 @@ pub fn cmd_run(cli: &Cli) -> Result<()> {
                     println!("placement mode enabled");
                     return Ok(());
                 }
-                // The daemon disappeared between the query and the command;
-                // fall through and start a fresh one below.
             } else {
                 println!("nitroget is already running for {}", folder.display());
                 return Ok(());
@@ -56,9 +54,7 @@ pub fn cmd_run(cli: &Cli) -> Result<()> {
         return Ok(());
     }
 
-    // Bind the control socket before GTK starts. Binding is the single-instance
-    // lock: if another process wins the race, this one fails here and exits
-    // instead of running a duplicate set of widgets.
+    // Bind the control socket before GTK starts.
     let (command_tx, command_rx) = async_channel::unbounded::<String>();
     let socket = ipc::serve(
         socket_path,

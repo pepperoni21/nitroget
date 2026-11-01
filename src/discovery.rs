@@ -99,8 +99,6 @@ fn scan(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) -> Result<()> {
 
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
-        // An unreadable subfolder must not prevent the rest of the set from
-        // loading. The root folder itself still reports the error.
         Err(e) if depth == 0 => {
             return Err(e).with_context(|| format!("cannot read {}", dir.display()));
         }
@@ -132,7 +130,6 @@ pub fn mtime_of(path: &Path) -> SystemTime {
         .unwrap_or(UNIX_EPOCH)
 }
 
-/// FNV-1a, stable across runs and Rust versions.
 pub fn short_hash(value: &str) -> String {
     let mut hash = Fnv::new();
     hash.write(value.as_bytes());

@@ -1,8 +1,3 @@
-//! Monitor geometry, effective placement and snapping helpers.
-//!
-//! This is the single place that turns `anchor + offset + output` into pixels,
-//! shared by the renderer (via `main`) and the mouse placement mode.
-
 use gtk::prelude::*;
 
 use crate::component::{Component, DEFAULT_HEIGHT, DEFAULT_WIDTH, Placement};

@@ -1,8 +1,4 @@
 //! Single-owner application state and the message loop.
-//!
-//! GTK signal handlers, Lua timers, exec threads, the file watcher and the IPC
-//! socket never touch widget state directly. They send a `Msg`; one main-loop
-//! future owns `AppState` and applies messages with `&mut self`.
 
 use std::collections::HashMap;
 use std::path::PathBuf;

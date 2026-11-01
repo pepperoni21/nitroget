@@ -1,8 +1,4 @@
 //! Lua runtime, timers and exec callbacks for one widget.
-//!
-//! The script's callbacks live in a registry table inside the Lua state, not in
-//! shared Rust maps. Timers and exec threads only send messages back to the
-//! single owner.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;

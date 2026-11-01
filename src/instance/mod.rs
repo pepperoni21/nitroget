@@ -1,5 +1,3 @@
-//! One live widget instance: window, Lua state, timers, CSS provider.
-
 mod runtime;
 mod view;
 
@@ -60,9 +58,6 @@ impl Instance {
     ) -> Result<Instance> {
         let display = gtk::gdk::Display::default().context("no Wayland display")?;
 
-        // wlr-layer-shell is implemented by wlroots/Smithay compositors, KDE and
-        // Mir — not by GNOME. Never assume a specific compositor: probe the
-        // protocol and degrade to a normal window when it is missing.
         let use_layer_shell = !windowed && gtk4_layer_shell::is_supported();
         if !windowed && !use_layer_shell {
             eprintln!(
@@ -309,8 +304,6 @@ pub fn sanitize(name: &str) -> String {
         .collect()
 }
 
-/// Wayland has no "primary output" concept; GDK's first monitor is the
-/// compositor's default, which is the closest portable equivalent.
 fn primary_monitor() -> Option<gtk::gdk::Monitor> {
     monitor_at(0)
 }
@@ -324,8 +317,7 @@ fn monitor_at(index: i32) -> Option<gtk::gdk::Monitor> {
         .and_then(|object| object.downcast::<gtk::gdk::Monitor>().ok())
 }
 
-/// Resolves an output by connector name (`DP-1`), model, or a unique
-/// substring. GDK-only, so it is independent of the compositor.
+/// Resolves an output by connector name (`DP-1`)
 fn find_monitor(name: &str) -> Option<gtk::gdk::Monitor> {
     let display = gtk::gdk::Display::default()?;
     let monitors = display.monitors();

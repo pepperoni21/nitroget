@@ -66,9 +66,6 @@ pub fn send(path: &Path, command: &str) -> Result<String> {
     let mut stream = UnixStream::connect(path)
         .with_context(|| format!("cannot connect to {}", path.display()))?;
 
-    // A wedged daemon must not block `nitroget` or `nitroget placement`
-    // forever. `serve` still refuses to replace a socket that accepts
-    // connections, so a timeout cannot silently start a second daemon.
     stream
         .set_write_timeout(Some(REPLY_TIMEOUT))
         .and_then(|_| stream.set_read_timeout(Some(REPLY_TIMEOUT)))
@@ -116,8 +113,6 @@ fn prepare_private_dir(parent: &Path) -> Result<()> {
         }
     }
 
-    // Re-check after creation and then tighten. `set_permissions` also fails if
-    // a raced-in directory is not ours.
     let meta = std::fs::symlink_metadata(parent)
         .with_context(|| format!("cannot inspect {}", parent.display()))?;
     if meta.file_type().is_symlink() || !meta.file_type().is_dir() || meta.uid() != uid() {
@@ -133,9 +128,6 @@ fn prepare_private_dir(parent: &Path) -> Result<()> {
 }
 
 /// Binds the control socket and serves commands until the daemon exits.
-///
-/// `folder` is the widget folder the daemon is running, reported to `where`.
-/// Binding this socket is what enforces a single daemon instance.
 pub fn serve(
     path: PathBuf,
     folder: String,
@@ -169,8 +161,6 @@ pub fn serve(
 
     let listener = match UnixListener::bind(&path) {
         Ok(listener) => listener,
-        // Two processes can pass the stale-socket check at the same time.
-        // Losing the bind race means the other one is the running daemon.
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
             bail!("nitroget is already running on {}", path.display());
         }
@@ -187,8 +177,6 @@ pub fn serve(
             let Ok(mut stream) = stream else {
                 continue;
             };
-            // A client that connects and never sends a line must not block the
-            // accept loop forever.
             let _ = stream.set_read_timeout(Some(REPLY_TIMEOUT));
             let _ = stream.set_write_timeout(Some(REPLY_TIMEOUT));
             let Ok(clone) = stream.try_clone() else {
@@ -212,8 +200,6 @@ pub fn serve(
                 continue;
             }
 
-            // Acknowledge `quit` before the main loop tears the daemon down,
-            // otherwise the client can lose the race and see a broken pipe.
             if command == "quit" {
                 let _ = stream.write_all(b"ok\n");
                 let _ = tx.send_blocking(command);
@@ -230,9 +216,6 @@ pub fn serve(
     Ok(SocketGuard { path })
 }
 
-/// Removes the control socket when the daemon shuts down cleanly. Crashes and
-/// `SIGKILL` still leave the file behind; `serve` detects and replaces stale
-/// sockets on the next start.
 pub struct SocketGuard {
     path: PathBuf,
 }

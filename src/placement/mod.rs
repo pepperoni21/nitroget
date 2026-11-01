@@ -178,9 +178,7 @@ impl Placement {
                 continue;
             };
             let monitor = &monitors[index];
-            // Prefer the size GTK actually gave the mapped surface. The
-            // declared size is only a request and can differ after content or
-            // theme changes; an outline based on it would not match the widget.
+            // Prefer the size GTK actually gave the mapped surface.
             let mut placement = comp.placement.clone();
             if let Some(info) = live.get(&comp.name)
                 && info.width > 0
@@ -190,9 +188,6 @@ impl Placement {
                 placement.height = Some(info.height);
             }
 
-            // Use the overlay's usable area when it is already mapped (a
-            // repeated placement session). On the first session it is mapped
-            // asynchronously by the reflow below.
             let geometry = self
                 .overlays
                 .get(&monitor.connector)
@@ -223,9 +218,6 @@ impl Placement {
         self.stable = false;
         self.set_ui_active(true);
 
-        // On a later placement session the overlays are already mapped, so
-        // their size should still match the last stable observation and we can
-        // paint immediately. On the first session, wait for a stable size.
         let current = self.current_geometry();
         if current
             .as_ref()
@@ -241,10 +233,6 @@ impl Placement {
         }
     }
 
-    /// Wait for every overlay to report a usable size, then require that size
-    /// to remain unchanged for one polling interval before painting. This
-    /// avoids the outline being drawn at an intermediate compositor size and
-    /// then corrected.
     pub fn reflow(&mut self) {
         self.reflow_scheduled = false;
 
@@ -278,9 +266,6 @@ impl Placement {
             return;
         }
 
-        // Give the compositor time to finish configuring a freshly mapped
-        // overlay. A short stable window avoids painting at an intermediate
-        // size and then correcting the outlines.
         self.stable_checks += 1;
         if self.stable_checks < 8 {
             self.update_rects(&current);

@@ -345,8 +345,6 @@ impl REach {
     }
 }
 
-// --------------------------------------------------------------------- build
-
 fn build_nodes(inst: &mut Instance, nodes: &[Node]) -> Result<Vec<RNode>> {
     let mut out = Vec::with_capacity(nodes.len());
 
@@ -476,8 +474,6 @@ fn build_element(inst: &mut Instance, element: &TplElement) -> Result<RNode> {
             };
 
             let grid = gtk::Grid::new();
-            // Equal columns are what make this a real grid: a two-digit day
-            // cannot make its column wider than a one-digit day.
             grid.set_column_homogeneous(true);
             grid.set_hexpand(true);
             grid.set_column_spacing(spacing.max(0) as u32);

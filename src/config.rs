@@ -1,7 +1,6 @@
 //! Placement for one widget folder: `<widget folder>/config.toml`.
 //!
-//! Widgets are portable: they carry content and intrinsic size, never a
-//! position or a monitor name. The config is optional; without it the engine
+//! The config is optional; without it the engine
 //! lays widgets out automatically.
 //!
 //! ```toml
@@ -23,10 +22,6 @@ use serde::Deserialize;
 use crate::component::{self, Component};
 
 pub const FILE_NAME: &str = "config.toml";
-
-/// Placement config is small. Refuse unexpectedly large files rather than
-/// allocating an arbitrary amount of memory before parsing them.
-const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 
 /// Default margin from the screen edge and gap between stacked widgets.
 const DEFAULT_MARGIN: i32 = 40;
@@ -110,12 +105,6 @@ pub fn load(path: &Path) -> Result<Config> {
         }
         Ok(meta) if !meta.file_type().is_file() => {
             bail!("{} is not a regular file", path.display());
-        }
-        Ok(meta) if meta.len() > MAX_CONFIG_BYTES => {
-            bail!(
-                "{} is too large (limit {MAX_CONFIG_BYTES} bytes)",
-                path.display()
-            );
         }
         Ok(_) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Config::default()),

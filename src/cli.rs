@@ -152,8 +152,6 @@ impl Cli {
         std::fs::canonicalize(&dir).unwrap_or(dir)
     }
 
-    /// One GTK application id per widget directory. The control socket is
-    /// global, so this only affects GTK's own activation handling.
     pub fn dir_hash(&self) -> String {
         short_hash(&self.canonical_search_dir().to_string_lossy())
     }
@@ -166,7 +164,6 @@ impl Cli {
         ipc::socket_path()
     }
 
-    /// Placement/monitor config for the selected widget set.
     pub fn config_path(&self) -> PathBuf {
         config_path_for(&self.search_dir())
     }

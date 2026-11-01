@@ -41,9 +41,6 @@ impl Instance {
         self.tree = None;
         self.textures.clear();
         self.window.set_child(None::<&gtk::Widget>);
-        // A fully transparent empty window can make GTK skip the commit,
-        // leaving the last frame on screen. A nearly transparent background
-        // forces a fresh, blank buffer.
         self.window.add_css_class("nitroget-parked");
         self.window.set_opacity(1.0);
         self.window.set_can_target(false);
@@ -62,9 +59,7 @@ impl Instance {
         self.lua = Lua::new();
     }
 
-    /// Frees the widget's content and Lua heap while keeping the surface
-    /// mapped. Destroying a layer surface disconnects the client on some
-    /// compositors, so replaced widgets are kept as empty surfaces.
+    /// Frees the widget's content and Lua heap while keeping the surface mapped
     pub fn retire(&mut self) {
         self.park();
         self.comp.template.clear();
