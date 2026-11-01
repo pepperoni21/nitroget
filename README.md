@@ -35,6 +35,12 @@ Only one instance runs at a time. Save a widget file and it
 reloads automatically. Placement is stored in `config.toml` inside the widget
 folder (`~/.config/nitroget/config.toml` by default).
 
+### Placement
+
+![Moving widgets in placement mode](docs/placement.gif)
+
+Run `nitroget placement`, drag widgets, then press Enter to save (Esc cancels). Works across monitors.
+
 ## Example
 
 `~/.config/nitroget/clock.nitroget`:
