@@ -11,6 +11,11 @@ Requires GTK 4.12+, `gtk4-layer-shell`, and a compositor with layer-shell
 support (sway, niri, Hyprland, KDE, COSMIC, etc.).
 
 ```sh
+# Via crates.io
+cargo install nitroget
+
+# By cloning the repo
+git clone https://github.com/pepperoni21/nitroget
 cargo install --path .
 ```
 
