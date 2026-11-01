@@ -1,0 +1,288 @@
+<widget name="weather" width="360">
+  <box class="card">
+    <row class="head">
+      <label class="place">{place}</label>
+      <spacer />
+      <button class="refresh" on:click="refresh()">↻</button>
+    </row>
+
+    <row class="now">
+      <label class="icon">{current_icon}</label>
+      <label class="temp">{current_temp}</label>
+      <box class="meta">
+        <label class="desc">{current_desc}</label>
+        <label class="sub">{current_sub}</label>
+      </box>
+    </row>
+
+    <sep class="divider" />
+
+    {#each forecast as day}
+      <row class="day">
+        <label class="dow" width="34">{day.dow}</label>
+        <label class="dicon" width="22" halign="center">{day.icon}</label>
+        <label class="ddesc">{day.desc}</label>
+        <spacer />
+        <label class="hi" width="34" halign="end">{day.high}</label>
+        <label class="lo" width="34" halign="end">{day.low}</label>
+      </row>
+    {/each}
+
+    {#if status ~= ""}
+      <label class="status">{status}</label>
+    {/if}
+  </box>
+</widget>
+
+<style>
+  .card {
+    background-color: rgba(18, 18, 24, 0.78);
+    border-radius: 18px;
+    padding: 16px 18px;
+  }
+
+  .head {
+    margin-bottom: 6px;
+  }
+
+  .place {
+    font-size: 13px;
+    font-weight: 800;
+    color: #f4f4f5;
+  }
+
+  .refresh {
+    background-image: none;
+    background-color: transparent;
+    border: none;
+    color: #a1a1aa;
+    border-radius: 8px;
+    min-width: 24px;
+    min-height: 24px;
+    padding: 0;
+    font-size: 16px;
+  }
+
+  .refresh:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: #f4f4f5;
+  }
+
+  .now {
+    margin-top: 4px;
+  }
+
+  .icon {
+    font-family: "Noto Sans Symbols 2", "DejaVu Sans", sans-serif;
+    font-size: 38px;
+    color: #fbbf24;
+  }
+
+  .temp {
+    font-size: 40px;
+    font-weight: 800;
+    color: #f4f4f5;
+    margin-left: 8px;
+  }
+
+  .meta {
+    margin-left: 10px;
+  }
+
+  .desc {
+    font-size: 13px;
+    color: #d4d4d8;
+  }
+
+  .sub {
+    font-size: 10px;
+    color: #71717a;
+    margin-top: 2px;
+  }
+
+  .divider {
+    margin: 10px 0 6px;
+    background-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .day {
+    margin-top: 4px;
+  }
+
+  .dow {
+    font-size: 11px;
+    color: #a1a1aa;
+  }
+
+  .dicon {
+    font-family: "Noto Sans Symbols 2", "DejaVu Sans", sans-serif;
+    font-size: 14px;
+    color: #d4d4d8;
+  }
+
+  .ddesc {
+    font-size: 11px;
+    color: #71717a;
+  }
+
+  .hi {
+    font-size: 11px;
+    color: #f4f4f5;
+  }
+
+  .lo {
+    font-size: 11px;
+    color: #71717a;
+  }
+
+  .status {
+    font-size: 10px;
+    color: #fbbf24;
+    margin-top: 6px;
+  }
+</style>
+
+<script>
+  -- Edit these three values to your location.
+  local latitude = 52.5200
+  local longitude = 13.4050
+  place = "Berlin"
+
+  local url = string.format(
+    "https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f"
+      .. "&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code"
+      .. "&daily=weather_code,temperature_2m_max,temperature_2m_min"
+      .. "&forecast_days=3&timezone=auto",
+    latitude,
+    longitude
+  )
+
+  local jq_program = [[
+    "C|\(.current.temperature_2m)|\(.current.apparent_temperature)|\(.current.relative_humidity_2m)|\(.current.wind_speed_10m)|\(.current.weather_code)",
+    (.daily as $d | range(0; ($d.time|length)) as $i | "D|\($d.time[$i])|\($d.weather_code[$i])|\($d.temperature_2m_max[$i])|\($d.temperature_2m_min[$i])")
+  ]]
+
+  local command = "curl -fsS --max-time 10 '" .. url
+    .. "' -o /tmp/nitroget-weather.json && jq -r '" .. jq_program
+    .. "' /tmp/nitroget-weather.json"
+
+  local tools_ok = false
+  do
+    local pipe = io.popen(
+      "command -v curl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 && echo yes"
+    )
+    if pipe then
+      local value = pipe:read("*l")
+      pipe:close()
+      tools_ok = value == "yes"
+    end
+  end
+
+  current_icon = "·"
+  current_temp = "—"
+  current_desc = "loading"
+  current_sub = ""
+  forecast = {}
+  status = tools_ok and "updating" or "needs curl + jq"
+
+  local fetching = false
+
+  local function describe(code)
+    local value = tonumber(code) or -1
+    if value == 0 then
+      return "☀", "Clear"
+    elseif value == 1 or value == 2 then
+      return "⛅", "Partly cloudy"
+    elseif value == 3 then
+      return "☁", "Overcast"
+    elseif value == 45 or value == 48 then
+      return "≋", "Fog"
+    elseif value >= 51 and value <= 57 then
+      return "☂", "Drizzle"
+    elseif value >= 61 and value <= 67 then
+      return "☂", "Rain"
+    elseif value >= 71 and value <= 77 then
+      return "❄", "Snow"
+    elseif value >= 80 and value <= 82 then
+      return "☂", "Showers"
+    elseif value == 85 or value == 86 then
+      return "❄", "Snow showers"
+    elseif value >= 95 then
+      return "⚡", "Storm"
+    end
+    return "·", "Unknown"
+  end
+
+  local function temperature(value)
+    local number = tonumber(value)
+    if not number then
+      return "—"
+    end
+    return string.format("%.0f°", number)
+  end
+
+  local function parse(output)
+    local days = {}
+
+    for line in output:gmatch("[^\r\n]+") do
+      local fields = {}
+      for field in (line .. "|"):gmatch("(.-)|") do
+        fields[#fields + 1] = field
+      end
+
+      if fields[1] == "C" then
+        current_temp = temperature(fields[2])
+        current_icon, current_desc = describe(fields[6])
+        current_sub = string.format(
+          "Feels %s · %s%% Humidity · %s km/h",
+          temperature(fields[3]),
+          fields[4] or "—",
+          fields[5] or "—"
+        )
+      elseif fields[1] == "D" then
+        local year, month, day = (fields[2] or ""):match("(%d+)-(%d+)-(%d+)")
+        local timestamp = nil
+        if year then
+          timestamp = os.time {
+            year = tonumber(year),
+            month = tonumber(month),
+            day = tonumber(day),
+          }
+        end
+
+        local icon, description = describe(fields[3])
+        days[#days + 1] = {
+          dow = timestamp and os.date("%a", timestamp) or "—",
+          icon = icon,
+          desc = description,
+          high = temperature(fields[4]),
+          low = temperature(fields[5]),
+        }
+      end
+    end
+
+    forecast = days
+  end
+
+  function refresh()
+    if fetching or not tools_ok then
+      return
+    end
+
+    fetching = true
+    status = "updating"
+
+    nitroget.exec(command, function(ok, output)
+      fetching = false
+      if ok and output:sub(1, 2) == "C|" then
+        parse(output)
+        status = ""
+      else
+        status = "offline · showing last data"
+      end
+    end)
+  end
+
+  refresh()
+  nitroget.every(900000, refresh)
+</script>

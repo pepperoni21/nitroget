@@ -169,6 +169,10 @@ impl AppState {
             &self.app,
             &self.tx,
         );
+
+        // Keep the placement overlays mapped and parked. This makes their
+        // usable-area geometry available before placement mode is entered.
+        self.placement.prepare();
     }
 
     fn run(&mut self, key: &WidgetKey, code: &str, event: Option<f64>) {

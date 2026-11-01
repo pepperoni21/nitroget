@@ -26,15 +26,20 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use crate::template::{self, Element, Node};
 
+/// Fallbacks for automatic layout when a widget leaves a dimension to GTK.
+pub const DEFAULT_WIDTH: i32 = 320;
+pub const DEFAULT_HEIGHT: i32 = 160;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Placement {
     /// Set by `config.toml` or the automatic layout, never by the widget.
     pub anchor: Option<String>,
     /// Set by `config.toml` or the automatic layout, never by the widget.
     pub offset: Option<(i32, i32)>,
-    /// Intrinsic size, with an optional `config.toml` override.
-    pub width: i32,
-    pub height: i32,
+    /// Intrinsic size, with an optional `config.toml` override. `None` lets
+    /// GTK use the natural/minimum content size.
+    pub width: Option<i32>,
+    pub height: Option<i32>,
     /// `bottom` by default; a widget may ask for `overlay`, etc.
     pub layer: String,
     /// Machine-local monitor selection; `None` lets the compositor choose.
@@ -49,8 +54,8 @@ impl Default for Placement {
         Self {
             anchor: None,
             offset: None,
-            width: 320,
-            height: 160,
+            width: None,
+            height: None,
             layer: "bottom".into(),
             output: None,
             output_index: None,
@@ -173,16 +178,18 @@ fn placement_from(root: &Element) -> Result<(Placement, Vec<String>)> {
     }
 
     if let Some(w) = root.attr("width") {
-        p.width = w.parse().map_err(|_| anyhow!("width must be a number"))?;
-        if p.width <= 0 {
+        let width: i32 = w.parse().map_err(|_| anyhow!("width must be a number"))?;
+        if width <= 0 {
             bail!("width must be positive");
         }
+        p.width = Some(width);
     }
     if let Some(h) = root.attr("height") {
-        p.height = h.parse().map_err(|_| anyhow!("height must be a number"))?;
-        if p.height <= 0 {
+        let height: i32 = h.parse().map_err(|_| anyhow!("height must be a number"))?;
+        if height <= 0 {
             bail!("height must be positive");
         }
+        p.height = Some(height);
     }
 
     if let Some(l) = root.attr("layer") {
@@ -237,4 +244,25 @@ fn extract_block(src: &str, tag: &str) -> Option<(String, String)> {
     rest.push_str(&src[body_end + close.len()..]);
 
     Some((body, rest))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn omitted_dimensions_are_automatic() {
+        let path = Path::new("auto.nitroget");
+        let comp = parse("<widget name=\"auto\"></widget>", path).unwrap();
+        assert_eq!(comp.placement.width, None);
+        assert_eq!(comp.placement.height, None);
+
+        let comp = parse("<widget name=\"auto\" width=\"200\"></widget>", path).unwrap();
+        assert_eq!(comp.placement.width, Some(200));
+        assert_eq!(comp.placement.height, None);
+
+        let comp = parse("<widget name=\"auto\" height=\"80\"></widget>", path).unwrap();
+        assert_eq!(comp.placement.width, None);
+        assert_eq!(comp.placement.height, Some(80));
+    }
 }

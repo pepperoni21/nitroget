@@ -1,0 +1,347 @@
+<widget name="battery" width="300">
+  <box class="card">
+    {#if has_battery}
+      <row class="head">
+        <label class="pct {level_class}">{capacity}%</label>
+        <spacer />
+        <label class="state">{status_text}</label>
+      </row>
+      <bar class="battery {level_class}" value="{capacity}" max="100" />
+      <row class="foot">
+        <label class="hint">{detail}</label>
+        <spacer />
+        <label class="hint">{remaining}</label>
+      </row>
+    {:else}
+      <label class="empty">No battery found</label>
+      <label class="hint">This widget needs a laptop battery.</label>
+    {/if}
+
+    <row class="modes" gap="6">
+      <button class="mode {mode_battery_class}" hexpand="true" on:click="set_mode('battery')">Battery</button>
+      <button class="mode {mode_balanced_class}" hexpand="true" on:click="set_mode('balanced')">Balanced</button>
+      <button class="mode {mode_performance_class}" hexpand="true" on:click="set_mode('performance')">Performance</button>
+    </row>
+
+    {#if power_hint ~= ""}
+      <label class="power-hint">{power_hint}</label>
+    {/if}
+  </box>
+</widget>
+
+<style>
+  .card {
+    background-color: rgba(18, 18, 24, 0.78);
+    border-radius: 18px;
+    padding: 16px 20px;
+  }
+
+  .pct {
+    font-size: 40px;
+    font-weight: 800;
+    color: #34d399;
+  }
+
+  .pct.mid {
+    color: #fbbf24;
+  }
+
+  .pct.low {
+    color: #f87171;
+  }
+
+  .state {
+    font-size: 11px;
+    font-weight: 700;
+    color: #a1a1aa;
+  }
+
+  .battery {
+    min-height: 8px;
+    margin-top: 10px;
+  }
+
+  .battery trough {
+    min-height: 8px;
+    border-radius: 4px;
+    background-image: none;
+    background-color: rgba(255, 255, 255, 0.10);
+  }
+
+  .battery progress {
+    min-height: 8px;
+    border-radius: 4px;
+    background-image: none;
+    background-color: #34d399;
+  }
+
+  .battery.mid progress {
+    background-color: #fbbf24;
+  }
+
+  .battery.low progress {
+    background-color: #f87171;
+  }
+
+  .foot {
+    margin-top: 10px;
+  }
+
+  .modes {
+    margin-top: 14px;
+  }
+
+  .mode {
+    background-image: none;
+    background-color: rgba(255, 255, 255, 0.06);
+    border: none;
+    color: #a1a1aa;
+    border-radius: 8px;
+    padding: 4px 0;
+    font-size: 10px;
+    font-weight: 700;
+  }
+
+  .mode:hover {
+    background-color: rgba(255, 255, 255, 0.12);
+    color: #f4f4f5;
+  }
+
+  .mode.active {
+    background-color: #6366f1;
+    color: #ffffff;
+  }
+
+  .power-hint {
+    font-size: 9px;
+    color: #fbbf24;
+    margin-top: 6px;
+  }
+
+  .hint {
+    font-size: 10px;
+    color: #71717a;
+  }
+
+  .empty {
+    font-size: 18px;
+    font-weight: 800;
+    color: #f4f4f5;
+  }
+</style>
+
+<script>
+  local function read(path)
+    local file = io.open(path, "r")
+    if not file then
+      return nil
+    end
+    local value = file:read("*l")
+    file:close()
+    return value
+  end
+
+  local function batteries()
+    local list = {}
+    local pipe = io.popen(
+      "for d in /sys/class/power_supply/BAT*; do "
+        .. "[ -d \"$d\" ] && printf '%s\\n' \"$d\"; done 2>/dev/null"
+    )
+    if pipe then
+      for line in pipe:lines() do
+        list[#list + 1] = line
+      end
+      pipe:close()
+    end
+    return list
+  end
+
+  local function has_command(name)
+    local pipe = io.popen("command -v " .. name .. " 2>/dev/null")
+    if not pipe then
+      return false
+    end
+    local path = pipe:read("*l")
+    pipe:close()
+    return path ~= nil and #path > 0
+  end
+
+  local power_backend = has_command("powerprofilesctl") and "ppd" or "none"
+  power_mode = ""
+  mode_battery_class = ""
+  mode_balanced_class = ""
+  mode_performance_class = ""
+  power_hint = power_backend == "none" and "powerprofilesctl not found" or ""
+
+  local function update_mode_classes()
+    mode_battery_class = power_mode == "battery" and "active" or ""
+    mode_balanced_class = power_mode == "balanced" and "active" or ""
+    mode_performance_class = power_mode == "performance" and "active" or ""
+  end
+
+  local function poll_power()
+    if power_backend ~= "ppd" then
+      power_mode = ""
+      power_hint = "powerprofilesctl not found"
+      update_mode_classes()
+      return
+    end
+
+    local pipe = io.popen("powerprofilesctl get 2>/dev/null")
+    local value = ""
+    if pipe then
+      value = pipe:read("*l") or ""
+      pipe:close()
+    end
+
+    if value == "power-saver" then
+      power_mode = "battery"
+    elseif value == "balanced" then
+      power_mode = "balanced"
+    elseif value == "performance" then
+      power_mode = "performance"
+    else
+      power_mode = ""
+    end
+
+    if power_mode == "" then
+      power_hint = "could not read the power profile"
+    else
+      power_hint = ""
+    end
+
+    update_mode_classes()
+  end
+
+  function set_mode(mode)
+    if power_backend ~= "ppd" then
+      power_hint = "powerprofilesctl not found"
+      return
+    end
+
+    local profile = mode == "battery" and "power-saver" or mode
+    power_mode = mode
+    update_mode_classes()
+    power_hint = ""
+
+    nitroget.exec("powerprofilesctl set " .. profile, function(ok)
+      poll_power()
+      if not ok then
+        power_hint = "could not change the power profile"
+      end
+    end)
+  end
+
+  poll_power()
+  nitroget.every(10000, poll_power)
+
+  local function tick()
+    local list = batteries()
+    has_battery = #list > 0
+
+    if not has_battery then
+      capacity = 0
+      status_text = ""
+      remaining = ""
+      detail = "no /sys/class/power_supply/BAT*"
+      level_class = ""
+      return
+    end
+
+    local capacity_sum, capacity_count = 0, 0
+    local charging, discharging, full, plugged = false, false, false, false
+    local energy, power = 0, 0
+    local charge, current = 0, 0
+    local energy_full, charge_full = 0, 0
+    local names = {}
+
+    for _, dir in ipairs(list) do
+      local value = tonumber(read(dir .. "/capacity") or "")
+      if value then
+        capacity_sum = capacity_sum + value
+        capacity_count = capacity_count + 1
+      end
+
+      local status = read(dir .. "/status") or "Unknown"
+      if status == "Charging" then
+        charging = true
+      elseif status == "Discharging" then
+        discharging = true
+      elseif status == "Full" then
+        full = true
+      elseif status == "Not charging" then
+        plugged = true
+      end
+
+      energy = energy + (tonumber(read(dir .. "/energy_now") or "") or 0)
+      power = power + (tonumber(read(dir .. "/power_now") or "") or 0)
+      charge = charge + (tonumber(read(dir .. "/charge_now") or "") or 0)
+      current = current + (tonumber(read(dir .. "/current_now") or "") or 0)
+      energy_full = energy_full + (tonumber(read(dir .. "/energy_full") or "") or 0)
+      charge_full = charge_full + (tonumber(read(dir .. "/charge_full") or "") or 0)
+
+      names[#names + 1] = dir:match("([^/]+)$") or dir
+    end
+
+    capacity = capacity_count > 0
+      and math.floor(capacity_sum / capacity_count + 0.5)
+      or 0
+
+    if capacity <= 15 then
+      level_class = "low"
+    elseif capacity <= 40 then
+      level_class = "mid"
+    else
+      level_class = "high"
+    end
+
+    if charging then
+      status_text = "Charging"
+    elseif full then
+      status_text = "Full"
+    elseif discharging then
+      status_text = "On battery"
+    elseif plugged then
+      status_text = "Plugged in"
+    else
+      status_text = "Idle"
+    end
+
+    local hours = 0
+    if discharging then
+      if power > 0 and energy > 0 then
+        hours = energy / power
+      elseif current > 0 and charge > 0 then
+        hours = charge / current
+      end
+    elseif charging then
+      if power > 0 and energy_full > energy then
+        hours = (energy_full - energy) / power
+      elseif current > 0 and charge_full > charge then
+        hours = (charge_full - charge) / current
+      end
+    end
+
+    if hours > 0 and hours < 100 then
+      local h = math.floor(hours)
+      local m = math.floor((hours - h) * 60 + 0.5)
+      if m >= 60 then
+        h = h + 1
+        m = 0
+      end
+      remaining = string.format(
+        "%dh %02dm %s",
+        h,
+        m,
+        discharging and "left" or "to full"
+      )
+    else
+      remaining = ""
+    end
+
+    detail = #names == 1 and names[1] or (#names .. " batteries")
+  end
+
+  tick()
+  nitroget.every(20000, tick)
+</script>

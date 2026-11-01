@@ -1,0 +1,180 @@
+<widget name="pomodoro" width="300">
+  <box class="card">
+    <row class="head">
+      <label class="phase {phase_class}">{phase}</label>
+      <spacer />
+      <label class="sessions">{sessions} done</label>
+    </row>
+
+    <label class="clock">{clock}</label>
+    <bar class="progress {phase_class}" value="{progress}" max="100" />
+
+    <row class="controls">
+      <button class="btn" on:click="toggle()">{toggle_label}</button>
+      <button class="btn ghost" on:click="reset()">reset</button>
+      <spacer />
+      <label class="hint">{cycle_label}</label>
+    </row>
+  </box>
+</widget>
+
+<style>
+  .card {
+    background-color: rgba(18, 18, 24, 0.78);
+    border-radius: 18px;
+    padding: 16px 20px;
+  }
+
+  .head {
+    margin-bottom: 2px;
+  }
+
+  .phase {
+    font-size: 12px;
+    font-weight: 800;
+    color: #818cf8;
+  }
+
+  .phase.break {
+    color: #34d399;
+  }
+
+  .sessions {
+    font-size: 10px;
+    color: #71717a;
+  }
+
+  .clock {
+    font-size: 48px;
+    font-weight: 800;
+    color: #f4f4f5;
+    margin: 4px 0 8px;
+  }
+
+  .progress {
+    min-height: 8px;
+  }
+
+  .progress trough {
+    min-height: 8px;
+    border-radius: 4px;
+    background-image: none;
+    background-color: rgba(255, 255, 255, 0.10);
+  }
+
+  .progress progress {
+    min-height: 8px;
+    border-radius: 4px;
+    background-image: none;
+    background-color: #818cf8;
+  }
+
+  .progress.break progress {
+    background-color: #34d399;
+  }
+
+  .controls {
+    margin-top: 14px;
+  }
+
+  .btn {
+    background-image: none;
+    background-color: #6366f1;
+    border: none;
+    color: white;
+    border-radius: 9px;
+    padding: 5px 14px;
+    font-weight: 700;
+    font-size: 12px;
+  }
+
+  .btn:hover {
+    background-color: #818cf8;
+  }
+
+  .ghost {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: #d4d4d8;
+    margin-left: 8px;
+  }
+
+  .hint {
+    font-size: 10px;
+    color: #52525b;
+  }
+</style>
+
+<script>
+  local focus_minutes = 25
+  local break_minutes = 5
+  local focus_seconds = focus_minutes * 60
+  local break_seconds = break_minutes * 60
+
+  phase = "Focus"
+  remaining = focus_seconds
+  running = false
+  sessions = 0
+
+  local function update()
+    local total = phase == "Focus" and focus_seconds or break_seconds
+    clock = string.format(
+      "%02d:%02d",
+      math.floor(remaining / 60),
+      remaining % 60
+    )
+    progress = total > 0
+      and math.floor((total - remaining) / total * 100 + 0.5)
+      or 0
+    toggle_label = running and "Pause" or "Start"
+    phase_class = phase == "Focus" and "focus" or "break"
+    cycle_label = string.format("%d / %d min", focus_minutes, break_minutes)
+  end
+
+  local function notify(message)
+    nitroget.run(
+      "command -v notify-send >/dev/null 2>&1 && "
+        .. "notify-send 'Pomodoro' '" .. message .. "'"
+    )
+  end
+
+  function toggle()
+    running = not running
+    update()
+  end
+
+  function reset()
+    running = false
+    phase = "Focus"
+    remaining = focus_seconds
+    sessions = 0
+    update()
+  end
+
+  update()
+
+  nitroget.every(1000, function()
+    if not running then
+      return
+    end
+
+    remaining = remaining - 1
+    if remaining > 0 then
+      update()
+      return
+    end
+
+    if phase == "Focus" then
+      sessions = sessions + 1
+      phase = "Break"
+      remaining = break_seconds
+      notify("Focus complete — take a break.")
+    else
+      phase = "Focus"
+      remaining = focus_seconds
+      notify("Break over — ready to focus.")
+    end
+
+    running = false
+    update()
+  end)
+</script>

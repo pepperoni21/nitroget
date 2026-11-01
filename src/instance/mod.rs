@@ -226,7 +226,10 @@ fn apply_placement(
     placement: &Placement,
     use_layer_shell: bool,
 ) {
-    window.set_default_size(placement.width, placement.height);
+    window.set_default_size(
+        placement.width.unwrap_or(-1),
+        placement.height.unwrap_or(-1),
+    );
 
     if !use_layer_shell {
         return;

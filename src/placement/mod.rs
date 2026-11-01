@@ -100,6 +100,29 @@ impl Placement {
         }
     }
 
+    /// Create and park overlays while the daemon is idle. By the time the user
+    /// enters placement, the compositor has already mapped them and reported
+    /// their usable-area size, so outlines can be painted once in the final
+    /// position.
+    pub fn prepare(&mut self) {
+        if self.active || self.windowed || !gtk4_layer_shell::is_supported() {
+            return;
+        }
+
+        let Ok(config) = config::load(&self.config_path) else {
+            return;
+        };
+        let monitors = layout::monitors(&config);
+        if monitors.is_empty() {
+            return;
+        }
+
+        self.monitors = monitors;
+        let monitors = self.monitors.clone();
+        self.ensure_overlays(&monitors);
+        self.set_ui_active(false);
+    }
+
     pub fn start(&mut self, live: &HashMap<String, LiveWidget>) {
         if self.active {
             return;
@@ -173,8 +196,8 @@ impl Placement {
                 && info.width > 0
                 && info.height > 0
             {
-                placement.width = info.width;
-                placement.height = info.height;
+                placement.width = Some(info.width);
+                placement.height = Some(info.height);
             }
 
             // Use the overlay's usable area when it is already mapped (a
@@ -242,6 +265,7 @@ impl Placement {
             return;
         }
 
+        let mut changed = false;
         for item in &mut self.items {
             let Some(overlay) = self.overlays.get(&item.monitor) else {
                 continue;
@@ -250,10 +274,20 @@ impl Placement {
             if usable.width <= 0 || usable.height <= 0 {
                 continue;
             }
-            item.rect = layout::rect_for(&item.placement, usable);
+            let rect = layout::rect_for(&item.placement, usable);
+            if rect != item.rect {
+                item.rect = rect;
+                changed = true;
+            }
         }
 
-        self.render();
+        for overlay in self.overlays.values_mut() {
+            overlay.layout_hint();
+        }
+
+        if changed {
+            self.render();
+        }
     }
 
     pub fn cancel(&mut self) {

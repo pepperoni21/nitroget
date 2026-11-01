@@ -464,6 +464,37 @@ fn build_element(inst: &mut Instance, element: &TplElement) -> Result<RNode> {
             (container.upcast(), RKind::Container, children)
         }
 
+        "grid" => {
+            let columns = match element.attr("columns") {
+                Some(raw) => eval_num(inst, raw)?.unwrap_or(1.0) as i32,
+                None => 1,
+            }
+            .max(1) as usize;
+            let spacing = match element.attr("gap") {
+                Some(raw) => eval_num(inst, raw)?.unwrap_or(0.0) as i32,
+                None => 0,
+            };
+
+            let grid = gtk::Grid::new();
+            // Equal columns are what make this a real grid: a two-digit day
+            // cannot make its column wider than a one-digit day.
+            grid.set_column_homogeneous(true);
+            grid.set_hexpand(true);
+            grid.set_column_spacing(spacing.max(0) as u32);
+            grid.set_row_spacing(spacing.max(0) as u32);
+
+            let children = build_nodes(inst, &element.children)?;
+            for (index, node) in children.iter().enumerate() {
+                let column = (index % columns) as i32;
+                let row = (index / columns) as i32;
+                for widget in node.widgets() {
+                    grid.attach(&widget, column, row, 1, 1);
+                }
+            }
+
+            (grid.upcast(), RKind::Container, children)
+        }
+
         "label" => {
             let raw = match element.attr("text") {
                 Some(text) => text.to_string(),

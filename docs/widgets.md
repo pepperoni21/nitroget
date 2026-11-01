@@ -55,8 +55,8 @@ The three blocks are:
 | Attribute | Default | Meaning |
 | --- | --- | --- |
 | `name` | file stem | CSS scope and the key in `config.toml` |
-| `width` | `320` | surface width in logical pixels |
-| `height` | `160` | surface height in logical pixels |
+| `width` | auto | surface width in logical pixels; omitted, GTK uses the natural size |
+| `height` | auto | surface height in logical pixels; omitted, GTK uses the natural size |
 | `layer` | `bottom` | `bottom`, `top`, `overlay`, or `background` |
 
 `bottom` puts the widget above the wallpaper and below normal windows, which is
@@ -64,7 +64,11 @@ what desktop widgets want. `background` is reserved for wallpaper daemons and
 usually receives no input.
 
 A template with a single top-level element expands that element to fill the
-configured surface, so its visible background matches `width` and `height`.
+surface, so its visible background matches the surface size.
+
+If `width` or `height` is omitted, GTK sizes that axis to the widget's natural
+minimum content size. `nitroget placement` uses the measured size, so outlines
+match auto-sized widgets too. `config.toml` can still override either axis.
 
 Position and monitor are **not** part of the widget. They live in
 `config.toml` next to the widgets (for the default folder,
@@ -85,6 +89,7 @@ the placement config uses.
 | --- | --- |
 | `box` | vertical container |
 | `row` | horizontal container |
+| `grid` | equal-width rows and columns |
 | `label` | text |
 | `bar` | progress bar |
 | `slider` | horizontal slider |
@@ -130,6 +135,20 @@ Vertical and horizontal containers. `gap` is the spacing in pixels.
   <spacer />
   <label>right</label>
 </row>
+```
+
+### `grid`
+
+Lays direct children out in rows and columns. `columns` defaults to `1`; columns
+are homogeneous, so every cell has the same width and one- and two-digit values
+remain aligned. `gap` adds spacing between cells.
+
+```html
+<grid columns="7">
+  <label>Mo</label>
+  <label>Tu</label>
+  <!-- ... -->
+</grid>
 ```
 
 ### `label`

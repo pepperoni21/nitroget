@@ -5,7 +5,7 @@
 
 use gtk::prelude::*;
 
-use crate::component::{Component, Placement};
+use crate::component::{Component, DEFAULT_HEIGHT, DEFAULT_WIDTH, Placement};
 use crate::config::Config;
 
 #[derive(Clone)]
@@ -133,8 +133,14 @@ pub fn monitor_signature() -> String {
 pub fn rect_for(placement: &Placement, geometry: Geometry) -> Rect {
     let (top, bottom, left, right) = crate::instance::parse_anchor(placement.anchor());
     let (ox, oy) = placement.offset();
-    let w = placement.width.min(geometry.width.max(1));
-    let h = placement.height.min(geometry.height.max(1));
+    let w = placement
+        .width
+        .unwrap_or(DEFAULT_WIDTH)
+        .min(geometry.width.max(1));
+    let h = placement
+        .height
+        .unwrap_or(DEFAULT_HEIGHT)
+        .min(geometry.height.max(1));
 
     let x = if left {
         ox
@@ -294,8 +300,8 @@ mod tests {
         Placement {
             anchor: Some(anchor.into()),
             offset: Some(offset),
-            width: 100,
-            height: 50,
+            width: Some(100),
+            height: Some(50),
             ..Default::default()
         }
     }
@@ -393,5 +399,15 @@ mod tests {
             h: 50,
         };
         assert_eq!(snap_rect(near_right, geometry(), 8, 14).x, 700);
+    }
+
+    #[test]
+    fn automatic_axes_use_layout_fallbacks() {
+        let placement = Placement {
+            anchor: Some("top-left".into()),
+            ..Default::default()
+        };
+        let rect = rect_for(&placement, geometry());
+        assert_eq!((rect.w, rect.h), (DEFAULT_WIDTH, DEFAULT_HEIGHT));
     }
 }

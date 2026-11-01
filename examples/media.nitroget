@@ -1,4 +1,4 @@
-<widget name="media" width="400" height="200">
+<widget name="media" width="400">
   <box class="card">
     <row class="now">
       {#if #art > 0}

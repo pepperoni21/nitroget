@@ -1,0 +1,227 @@
+<widget name="calendar" width="320">
+  <box class="card">
+    <row class="header">
+      <button class="nav" on:click="prev_month()">‹</button>
+      <spacer />
+      <label class="title">{title}</label>
+      <spacer />
+      <button class="nav" on:click="next_month()">›</button>
+    </row>
+
+    <grid class="weekdays" columns="7">
+      <label class="wd" hexpand="true" align="center">Mo</label>
+      <label class="wd" hexpand="true" align="center">Tu</label>
+      <label class="wd" hexpand="true" align="center">We</label>
+      <label class="wd" hexpand="true" align="center">Th</label>
+      <label class="wd" hexpand="true" align="center">Fr</label>
+      <label class="wd" hexpand="true" align="center">Sa</label>
+      <label class="wd" hexpand="true" align="center">Su</label>
+    </grid>
+
+    {#each weeks as week}
+      <grid class="week" columns="7">
+        <label class="day {week.d1.class}" hexpand="true" align="center">{week.d1.text}</label>
+        <label class="day {week.d2.class}" hexpand="true" align="center">{week.d2.text}</label>
+        <label class="day {week.d3.class}" hexpand="true" align="center">{week.d3.text}</label>
+        <label class="day {week.d4.class}" hexpand="true" align="center">{week.d4.text}</label>
+        <label class="day {week.d5.class}" hexpand="true" align="center">{week.d5.text}</label>
+        <label class="day {week.d6.class}" hexpand="true" align="center">{week.d6.text}</label>
+        <label class="day {week.d7.class}" hexpand="true" align="center">{week.d7.text}</label>
+      </grid>
+    {/each}
+
+    <row class="footer">
+      <label class="hint">{today_text}</label>
+      <spacer />
+      <button class="today" on:click="today()">today</button>
+    </row>
+  </box>
+</widget>
+
+<style>
+  .card {
+    background-color: rgba(18, 18, 24, 0.78);
+    border-radius: 18px;
+    padding: 14px 14px 12px;
+  }
+
+  .header {
+    margin-bottom: 8px;
+  }
+
+  .nav {
+    background-image: none;
+    background-color: transparent;
+    border: none;
+    color: #a1a1aa;
+    border-radius: 8px;
+    min-width: 26px;
+    min-height: 26px;
+    padding: 0;
+    font-size: 18px;
+  }
+
+  .nav:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: #f4f4f5;
+  }
+
+  .title {
+    font-size: 16px;
+    font-weight: 800;
+    color: #f4f4f5;
+  }
+
+  .weekdays {
+    margin-bottom: 4px;
+  }
+
+  .wd {
+    font-size: 10px;
+    font-weight: 700;
+    color: #71717a;
+  }
+
+  .day {
+    min-height: 24px;
+    border-radius: 7px;
+    font-size: 12px;
+    color: #d4d4d8;
+  }
+
+  .day.weekend {
+    color: #a1a1aa;
+  }
+
+  .day.today {
+    background-color: #6366f1;
+    color: #ffffff;
+    font-weight: 800;
+  }
+
+  .day.blank {
+    color: transparent;
+  }
+
+  .footer {
+    margin-top: 8px;
+  }
+
+  .hint {
+    font-size: 10px;
+    color: #71717a;
+  }
+
+  .today {
+    background-image: none;
+    background-color: rgba(255, 255, 255, 0.08);
+    border: none;
+    color: #d4d4d8;
+    border-radius: 7px;
+    padding: 2px 8px;
+    font-size: 10px;
+  }
+
+  .today:hover {
+    background-color: rgba(255, 255, 255, 0.14);
+  }
+</style>
+
+<script>
+  local now = os.date("*t")
+  local year, month = now.year, now.month
+  local today_year, today_month, today_day = now.year, now.month, now.day
+  local today_stamp = os.date("%Y-%m-%d", os.time(now))
+
+  local function build()
+    local first = os.time { year = year, month = month, day = 1 }
+    local days = tonumber(os.date("%d", os.time {
+      year = year,
+      month = month + 1,
+      day = 0,
+    }))
+    local lead = (tonumber(os.date("%w", first)) + 6) % 7
+
+    local cells = {}
+    local function blank()
+      return { text = "", class = "blank" }
+    end
+    local function day_cell(day)
+      local weekday = (lead + day - 1) % 7
+      local classes = {}
+      if year == today_year and month == today_month and day == today_day then
+        classes[#classes + 1] = "today"
+      end
+      if weekday >= 5 then
+        classes[#classes + 1] = "weekend"
+      end
+      return { text = tostring(day), class = table.concat(classes, " ") }
+    end
+
+    for _ = 1, lead do
+      cells[#cells + 1] = blank()
+    end
+    for day = 1, days do
+      cells[#cells + 1] = day_cell(day)
+    end
+    while #cells < 42 do
+      cells[#cells + 1] = blank()
+    end
+
+    local rows = {}
+    for index = 1, 42, 7 do
+      rows[#rows + 1] = {
+        d1 = cells[index],
+        d2 = cells[index + 1],
+        d3 = cells[index + 2],
+        d4 = cells[index + 3],
+        d5 = cells[index + 4],
+        d6 = cells[index + 5],
+        d7 = cells[index + 6],
+      }
+    end
+
+    weeks = rows
+    title = os.date("%B %Y", first)
+    today_text = os.date("%a, %d %b", os.time {
+      year = today_year,
+      month = today_month,
+      day = today_day,
+    })
+  end
+
+  function prev_month()
+    month = month - 1
+    if month < 1 then
+      month = 12
+      year = year - 1
+    end
+    build()
+  end
+
+  function next_month()
+    month = month + 1
+    if month > 12 then
+      month = 1
+      year = year + 1
+    end
+    build()
+  end
+
+  function today()
+    year, month = today_year, today_month
+    build()
+  end
+
+  build()
+
+  nitroget.every(60000, function()
+    local current = os.date("*t")
+    local stamp = os.date("%Y-%m-%d", os.time(current))
+    if stamp ~= today_stamp then
+      today_stamp = stamp
+      today_year, today_month, today_day = current.year, current.month, current.day
+      build()
+    end
+  end)
+</script>

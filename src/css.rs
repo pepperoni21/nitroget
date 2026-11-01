@@ -103,7 +103,7 @@ fn prefix_selectors(prelude: &str, scope: &str) -> String {
 /// Element tags are exposed as CSS classes so `<bar>` can be styled as `bar`.
 fn rewrite_tags(sel: &str) -> String {
     const TAGS: &[&str] = &[
-        "box", "row", "label", "bar", "slider", "button", "image", "spacer", "sep",
+        "box", "row", "grid", "label", "bar", "slider", "button", "image", "spacer", "sep",
     ];
 
     sel.split_whitespace()

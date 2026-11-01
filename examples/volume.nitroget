@@ -1,0 +1,233 @@
+<widget name="volume" width="340">
+  <box class="card">
+    <row class="head">
+      <label class="title">Volume</label>
+      <spacer />
+      <button class="mute" on:click="toggle_mute()">{mute_label}</button>
+    </row>
+
+    <row class="line">
+      <label class="k" width="42">output</label>
+      <slider class="slider" hexpand="true" value="{volume}" min="0" max="100" step="1" on:change="set_volume()" />
+      <label class="v" width="36" halign="end">{volume}%</label>
+    </row>
+
+    <row class="line">
+      <label class="k" width="42">mic</label>
+      <slider class="slider" hexpand="true" value="{mic}" min="0" max="100" step="1" on:change="set_mic()" />
+      <label class="v" width="36" halign="end">{mic}%</label>
+    </row>
+
+    <label class="hint">{status}</label>
+  </box>
+</widget>
+
+<style>
+  .card {
+    background-color: rgba(18, 18, 24, 0.78);
+    border-radius: 18px;
+    padding: 16px 18px;
+  }
+
+  .head {
+    margin-bottom: 8px;
+  }
+
+  .title {
+    font-size: 14px;
+    font-weight: 800;
+    color: #f4f4f5;
+  }
+
+  .mute {
+    background-image: none;
+    background-color: rgba(255, 255, 255, 0.08);
+    border: none;
+    color: #d4d4d8;
+    border-radius: 8px;
+    padding: 3px 10px;
+    font-size: 11px;
+  }
+
+  .mute:hover {
+    background-color: rgba(255, 255, 255, 0.14);
+  }
+
+  .line {
+    margin-top: 10px;
+  }
+
+  .k {
+    font-size: 11px;
+    font-weight: 700;
+    color: #a1a1aa;
+  }
+
+  .v {
+    font-size: 11px;
+    color: #f4f4f5;
+  }
+
+  slider {
+    margin: 0 8px;
+  }
+
+  slider trough {
+    min-height: 6px;
+    border-radius: 3px;
+    background-image: none;
+    background-color: rgba(255, 255, 255, 0.12);
+  }
+
+  slider highlight {
+    min-height: 6px;
+    border-radius: 3px;
+    background-image: none;
+    background-color: #6366f1;
+  }
+
+  slider slider {
+    min-width: 14px;
+    min-height: 14px;
+    background-image: none;
+    background-color: #f4f4f5;
+    border-radius: 7px;
+  }
+
+  .hint {
+    font-size: 10px;
+    color: #52525b;
+    margin-top: 10px;
+  }
+</style>
+
+<script>
+  local sink = "@DEFAULT_AUDIO_SINK@"
+  local source = "@DEFAULT_AUDIO_SOURCE@"
+
+  local function has(command)
+    local pipe = io.popen("command -v " .. command .. " 2>/dev/null")
+    if not pipe then
+      return false
+    end
+    local path = pipe:read("*l")
+    pipe:close()
+    return path ~= nil and #path > 0
+  end
+
+  local backend = "none"
+  if has("wpctl") then
+    backend = "wpctl"
+  elseif has("pactl") then
+    backend = "pactl"
+  end
+
+  volume, mic, muted = 0, 0, false
+  mute_label = "Mute"
+  status = backend == "none" and "install wpctl or pactl" or backend
+
+  local function wp_get(target)
+    local pipe = io.popen("wpctl get-volume " .. target .. " 2>/dev/null")
+    if not pipe then
+      return 0, false
+    end
+    local output = pipe:read("*a")
+    pipe:close()
+    local value = tonumber(output:match("Volume:%s*([%d%.]+)")) or 0
+    return math.floor(value * 100 + 0.5), output:find("%[MUTED%]") ~= nil
+  end
+
+  local function pactl_get(kind, target)
+    local pipe = io.popen(
+      "pactl get-" .. kind .. "-volume " .. target .. " 2>/dev/null"
+    )
+    if not pipe then
+      return 0, false
+    end
+    local output = pipe:read("*a")
+    pipe:close()
+    local value = tonumber(output:match("(%d+)%%")) or 0
+
+    local mute_pipe = io.popen(
+      "pactl get-" .. kind .. "-mute " .. target .. " 2>/dev/null"
+    )
+    local mute_output = ""
+    if mute_pipe then
+      mute_output = mute_pipe:read("*a")
+      mute_pipe:close()
+    end
+
+    return value, mute_output:find("yes") ~= nil
+  end
+
+  function poll()
+    if backend == "wpctl" then
+      volume, muted = wp_get(sink)
+      mic = wp_get(source)
+    elseif backend == "pactl" then
+      volume, muted = pactl_get("sink", "@DEFAULT_SINK@")
+      mic = pactl_get("source", "@DEFAULT_SOURCE@")
+    end
+
+    volume = math.max(0, math.min(100, volume))
+    mic = math.max(0, math.min(100, mic))
+    mute_label = muted and "Unmute" or "Mute"
+  end
+
+  local function apply_volume()
+    if backend == "wpctl" then
+      nitroget.run("wpctl set-volume " .. sink .. " " .. volume .. "%")
+    elseif backend == "pactl" then
+      nitroget.run("pactl set-sink-volume @DEFAULT_SINK@ " .. volume .. "%")
+    end
+  end
+
+  local function apply_mic()
+    if backend == "wpctl" then
+      nitroget.run("wpctl set-volume " .. source .. " " .. mic .. "%")
+    elseif backend == "pactl" then
+      nitroget.run("pactl set-source-volume @DEFAULT_SOURCE@ " .. mic .. "%")
+    end
+  end
+
+  local volume_timer
+  local mic_timer
+
+  function set_volume()
+    volume = math.floor(event.value)
+    if volume_timer then
+      nitroget.clear(volume_timer)
+    end
+    volume_timer = nitroget.after(120, function()
+      volume_timer = nil
+      apply_volume()
+    end)
+  end
+
+  function set_mic()
+    mic = math.floor(event.value)
+    if mic_timer then
+      nitroget.clear(mic_timer)
+    end
+    mic_timer = nitroget.after(120, function()
+      mic_timer = nil
+      apply_mic()
+    end)
+  end
+
+  function toggle_mute()
+    muted = not muted
+    mute_label = muted and "Unmute" or "Mute"
+
+    if backend == "wpctl" then
+      nitroget.run("wpctl set-mute " .. sink .. " toggle")
+    elseif backend == "pactl" then
+      nitroget.run("pactl set-sink-mute @DEFAULT_SINK@ toggle")
+    end
+
+    nitroget.after(120, poll)
+  end
+
+  poll()
+  nitroget.every(1500, poll)
+</script>

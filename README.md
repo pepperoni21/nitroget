@@ -3,6 +3,8 @@
 Desktop widgets for Wayland. A widget is one `.nitroget` file: a template, a
 stylesheet and a Lua script.
 
+![Nitroget example widgets](docs/examples.png)
+
 ## Install
 
 Requires GTK 4.12+, `gtk4-layer-shell`, and a compositor with layer-shell

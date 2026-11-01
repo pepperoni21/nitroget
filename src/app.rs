@@ -205,8 +205,14 @@ pub fn cmd_check(cli: &Cli) -> Result<()> {
             "ok    {}  [{}] {}x{} anchor={} offset={},{} output={} layer={}",
             comp.path.display(),
             comp.name,
-            comp.placement.width,
-            comp.placement.height,
+            comp.placement
+                .width
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "auto".into()),
+            comp.placement
+                .height
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "auto".into()),
             comp.placement.anchor(),
             offset_x,
             offset_y,
@@ -249,7 +255,9 @@ fn lint(comp: &component::Component) -> Vec<String> {
     if comp.script.trim().is_empty() {
         out.push("no <script> block".into());
     }
-    if comp.placement.height < 40 {
+    if let Some(height) = comp.placement.height
+        && height < 40
+    {
         out.push("height looks too small".into());
     }
     out

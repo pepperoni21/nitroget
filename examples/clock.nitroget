@@ -1,4 +1,4 @@
-<widget name="clock" width="320" height="150">
+<widget name="clock" width="320">
   <box class="card">
     <label class="time">{time}</label>
     <row class="meta">

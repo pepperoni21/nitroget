@@ -210,10 +210,10 @@ impl Config {
                 comp.placement.offset = Some(offset.pair());
             }
             if let Some(width) = widget.width {
-                comp.placement.width = width;
+                comp.placement.width = Some(width);
             }
             if let Some(height) = widget.height {
-                comp.placement.height = height;
+                comp.placement.height = Some(height);
             }
             if let Some(layer) = &widget.layer {
                 comp.placement.layer = layer.to_lowercase();
@@ -482,7 +482,7 @@ pub fn auto_place(components: &mut [Component], config: &Config) {
             comp.placement.offset = Some((margin, margin + heights[slot]));
         }
 
-        heights[slot] += comp.placement.height + GAP;
+        heights[slot] += comp.placement.height.unwrap_or(component::DEFAULT_HEIGHT) + GAP;
         next_slot += 1;
     }
 }
@@ -496,7 +496,7 @@ mod tests {
             path: std::path::PathBuf::from(format!("/w/{name}.nitroget")),
             name: name.into(),
             placement: component::Placement {
-                height,
+                height: Some(height),
                 ..Default::default()
             },
             template: Vec::new(),
