@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  build-test-clippy:
+    name: build, test, clippy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            git \
+            meson \
+            ninja-build \
+            pkg-config \
+            libgtk-4-dev \
+            libwayland-dev \
+            libwayland-bin \
+            libxkbcommon-dev \
+            wayland-protocols
+          # Ubuntu 24.04 does not package gtk4-layer-shell; newer releases do.
+          sudo apt-get install -y --no-install-recommends libgtk4-layer-shell-dev || true
+
+      - name: Build gtk4-layer-shell if the package is unavailable
+        run: |
+          if pkg-config --exists gtk4-layer-shell-0; then
+            echo "Using gtk4-layer-shell $(pkg-config --modversion gtk4-layer-shell-0)"
+            exit 0
+          fi
+
+          git clone --depth 1 --branch v1.3.0 \
+            https://github.com/wmww/gtk4-layer-shell.git /tmp/gtk4-layer-shell
+          cd /tmp/gtk4-layer-shell
+          # Pin the tag to the commit reviewed with this workflow.
+          test "$(git rev-parse HEAD)" = "1c963c51514581c41b9bdae08cdf69171265cdda"
+          meson setup build --buildtype=release --prefix=/usr \
+            -Dexamples=false \
+            -Ddocs=false \
+            -Dtests=false \
+            -Dintrospection=false \
+            -Dvapi=false
+          meson compile -C build
+          sudo meson install -C build
+          sudo ldconfig
+          pkg-config --modversion gtk4-layer-shell-0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --locked
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
