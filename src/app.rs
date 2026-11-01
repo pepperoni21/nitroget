@@ -355,7 +355,6 @@ fn builtin_template(name: &str) -> Option<&'static str> {
         "clock" => Some(include_str!("../examples/clock.nitroget")),
         "media" => Some(include_str!("../examples/media.nitroget")),
         "sysmon" => Some(include_str!("../examples/sysmon.nitroget")),
-        "counter" => Some(include_str!("../examples/counter.nitroget")),
         _ => None,
     }
 }

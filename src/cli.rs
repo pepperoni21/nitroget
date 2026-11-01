@@ -182,7 +182,7 @@ Usage:
   nitroget check [PATH]        parse widgets, Lua and config, then exit
   nitroget placement           toggle mouse placement mode
   nitroget quit                stop the running instance
-  nitroget new <name>          scaffold a widget (clock, media, sysmon, counter)
+  nitroget new <name>          scaffold a widget (clock, media, sysmon)
   nitroget help
   nitroget --version
 

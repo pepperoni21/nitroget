@@ -178,13 +178,6 @@ impl Placement {
             window.add_controller(keys);
         }
 
-        {
-            let tx = tx.clone();
-            window.connect_map(move |_| {
-                let _ = tx.try_send(Msg::Placement(PlacementMsg::Reflow));
-            });
-        }
-
         window.present();
 
         Overlay {

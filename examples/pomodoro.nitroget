@@ -11,7 +11,7 @@
 
     <row class="controls">
       <button class="btn" on:click="toggle()">{toggle_label}</button>
-      <button class="btn ghost" on:click="reset()">reset</button>
+      <button class="btn ghost" on:click="reset()">Reset</button>
       <spacer />
       <label class="hint">{cycle_label}</label>
     </row>

@@ -68,6 +68,14 @@ pub struct Placement {
     drag: Option<Drag>,
     css_ready: bool,
     tx: Sender<Msg>,
+    /// Usable-area size last observed for each monitor. Used to wait for a
+    /// stable size before painting, and to render immediately on later
+    /// placement sessions.
+    observed: HashMap<String, (i32, i32)>,
+    reflow_scheduled: bool,
+    reflow_attempts: u8,
+    stable_checks: u8,
+    stable: bool,
 }
 
 impl Placement {
@@ -89,6 +97,11 @@ impl Placement {
             drag: None,
             css_ready: false,
             tx,
+            observed: HashMap::new(),
+            reflow_scheduled: false,
+            reflow_attempts: 0,
+            stable_checks: 0,
+            stable: false,
         }
     }
 
@@ -98,29 +111,6 @@ impl Placement {
         } else {
             self.start(live);
         }
-    }
-
-    /// Create and park overlays while the daemon is idle. By the time the user
-    /// enters placement, the compositor has already mapped them and reported
-    /// their usable-area size, so outlines can be painted once in the final
-    /// position.
-    pub fn prepare(&mut self) {
-        if self.active || self.windowed || !gtk4_layer_shell::is_supported() {
-            return;
-        }
-
-        let Ok(config) = config::load(&self.config_path) else {
-            return;
-        };
-        let monitors = layout::monitors(&config);
-        if monitors.is_empty() {
-            return;
-        }
-
-        self.monitors = monitors;
-        let monitors = self.monitors.clone();
-        self.ensure_overlays(&monitors);
-        self.set_ui_active(false);
     }
 
     pub fn start(&mut self, live: &HashMap<String, LiveWidget>) {
@@ -227,67 +217,131 @@ impl Placement {
         }
 
         self.items = items;
+        self.reflow_scheduled = false;
+        self.reflow_attempts = 0;
+        self.stable_checks = 0;
+        self.stable = false;
         self.set_ui_active(true);
 
-        // Do not paint outlines with the provisional monitor geometry: on the
-        // first placement session the overlay is not mapped yet, so its usable
-        // area (and therefore the correct positions) is unknown.
-        let ready = self.items.iter().all(|item| {
-            self.overlays
-                .get(&item.monitor)
-                .is_some_and(|overlay| overlay.is_ready())
-        });
-        if ready {
+        // On a later placement session the overlays are already mapped, so
+        // their size should still match the last stable observation and we can
+        // paint immediately. On the first session, wait for a stable size.
+        let current = self.current_geometry();
+        if current
+            .as_ref()
+            .is_some_and(|geometry| *geometry == self.observed)
+        {
+            self.stable = true;
+            if let Some(geometry) = &current {
+                self.update_rects(geometry);
+            }
             self.render();
-        }
-
-        // The map signal normally triggers this immediately; the timers are a
-        // fallback for compositors that configure late.
-        for delay in [100, 400] {
-            let tx = self.tx.clone();
-            gtk::glib::timeout_add_local_once(Duration::from_millis(delay), move || {
-                let _ = tx.try_send(Msg::Placement(PlacementMsg::Reflow));
-            });
+        } else {
+            self.schedule_reflow();
         }
     }
 
-    /// Recompute outlines in the overlays' actual coordinate space.
+    /// Wait for every overlay to report a usable size, then require that size
+    /// to remain unchanged for one polling interval before painting. This
+    /// avoids the outline being drawn at an intermediate compositor size and
+    /// then corrected.
     pub fn reflow(&mut self) {
+        self.reflow_scheduled = false;
+
         if !self.active || self.drag.is_some() {
             return;
         }
 
-        if !self.items.iter().all(|item| {
-            self.overlays
-                .get(&item.monitor)
-                .is_some_and(|overlay| overlay.is_ready())
-        }) {
+        let Some(current) = self.current_geometry() else {
+            self.stable = false;
+            if self.reflow_attempts < 40 {
+                self.reflow_attempts += 1;
+                self.schedule_reflow();
+            }
+            return;
+        };
+
+        if self.observed != current {
+            self.observed = current.clone();
+            self.stable = false;
+            self.stable_checks = 0;
+            self.reflow_attempts = 0;
+            self.update_rects(&current);
+            for overlay in self.overlays.values_mut() {
+                overlay.layout_hint();
+            }
+            self.schedule_reflow();
             return;
         }
 
-        let mut changed = false;
-        for item in &mut self.items {
-            let Some(overlay) = self.overlays.get(&item.monitor) else {
-                continue;
-            };
-            let usable = overlay.usable_geometry();
-            if usable.width <= 0 || usable.height <= 0 {
-                continue;
-            }
-            let rect = layout::rect_for(&item.placement, usable);
-            if rect != item.rect {
-                item.rect = rect;
-                changed = true;
-            }
+        if self.stable {
+            return;
         }
 
+        // Give the compositor time to finish configuring a freshly mapped
+        // overlay. A short stable window avoids painting at an intermediate
+        // size and then correcting the outlines.
+        self.stable_checks += 1;
+        if self.stable_checks < 8 {
+            self.update_rects(&current);
+            for overlay in self.overlays.values_mut() {
+                overlay.layout_hint();
+            }
+            self.schedule_reflow();
+            return;
+        }
+
+        self.update_rects(&current);
         for overlay in self.overlays.values_mut() {
             overlay.layout_hint();
         }
+        self.render();
+        self.stable = true;
+        self.reflow_attempts = 0;
+    }
 
-        if changed {
-            self.render();
+    fn current_geometry(&self) -> Option<HashMap<String, (i32, i32)>> {
+        let mut geometry = HashMap::new();
+
+        for item in &self.items {
+            let overlay = self.overlays.get(&item.monitor)?;
+            if !overlay.is_ready() {
+                return None;
+            }
+            let usable = overlay.usable_geometry();
+            geometry.insert(item.monitor.clone(), (usable.width, usable.height));
         }
+
+        Some(geometry)
+    }
+
+    fn update_rects(&mut self, geometry: &HashMap<String, (i32, i32)>) {
+        for item in &mut self.items {
+            let Some(&(width, height)) = geometry.get(&item.monitor) else {
+                continue;
+            };
+            item.rect = layout::rect_for(
+                &item.placement,
+                layout::Geometry {
+                    x: 0,
+                    y: 0,
+                    width,
+                    height,
+                },
+            );
+        }
+    }
+
+    fn schedule_reflow(&mut self) {
+        if self.reflow_scheduled {
+            return;
+        }
+        self.reflow_scheduled = true;
+
+        let tx = self.tx.clone();
+        gtk::glib::timeout_add_local_once(Duration::from_millis(50), move || {
+            let _ = tx.try_send(Msg::Placement(PlacementMsg::Reflow));
+        });
     }
 
     pub fn cancel(&mut self) {

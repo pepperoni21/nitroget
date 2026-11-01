@@ -28,7 +28,7 @@ offset = [40, 40]
 anchor = "bottom-right"
 offset = [40, 40]
 
-[widgets.counter]
+[widgets.calendar]
 anchor = "bottom-left"
 offset = [40, 40]
 
@@ -39,7 +39,7 @@ offset = [40, 40]
 
 # Keep a widget installed but hidden:
 #
-# [widgets.counter]
+# [widgets.pomodoro]
 # enabled = false
 
 # Override intrinsic size or layer for one widget:
