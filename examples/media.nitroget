@@ -21,13 +21,19 @@
         <bar class="progress" value="{progress}" max="100" />
 
     <row class="controls">
-      <label class="time">{elapsed}</label>
+      <label class="time" width="56" halign="end">{elapsed}</label>
       <spacer />
-      <button class="ctl" valign="center" on:click="prev_track()">⏮</button>
-      <button class="ctl play" valign="center" on:click="toggle()">{play_icon}</button>
-      <button class="ctl" valign="center" on:click="next_track()">⏭</button>
+      <button class="ctl" valign="center" on:click="prev_track()">
+        <label class="glyph" halign="center" valign="center">⏮</label>
+      </button>
+      <button class="ctl play" valign="center" on:click="toggle()">
+        <label class="glyph" halign="center" valign="center">{play_icon}</label>
+      </button>
+      <button class="ctl" valign="center" on:click="next_track()">
+        <label class="glyph" halign="center" valign="center">⏭</label>
+      </button>
       <spacer />
-      <label class="time">{duration}</label>
+      <label class="time" width="56" halign="start">{duration}</label>
     </row>
   </box>
 </widget>
@@ -96,7 +102,7 @@
   }
 
   .controls {
-    margin-top: 6px;
+    margin-top: 15px;
   }
 
   .time {
@@ -118,6 +124,10 @@
 
   .ctl:hover {
     background-color: rgba(255, 255, 255, 0.10);
+  }
+
+  .ctl .glyph {
+    padding-top: 2px;
   }
 
   .play {
@@ -194,7 +204,7 @@
       progress = 0
       elapsed = "0:00"
       duration = "0:00"
-      play_icon = " ▶"
+      play_icon = "▶"
       update_art("")
       return
     end
@@ -211,7 +221,7 @@
     local position = tonumber(pos) or 0
     local length = tonumber(len) or 0
     progress = length > 0 and math.min(100, position / length * 100) or 0
-    play_icon = status == "Playing" and "⏸" or " ▶"
+    play_icon = status == "Playing" and "⏸" or "▶"
 
     update_art(url or "")
   end
