@@ -1,21 +1,5 @@
 name: Publish
 
-# Tag-driven release workflow using crates.io Trusted Publishing.
-#
-# One-time setup:
-#   crates.io -> nitroget -> Settings -> Trusted Publishing
-#     Owner:       pepperoni21
-#     Repository:  nitroget
-#     Workflow:    release.yml
-#     Environment: release
-#   GitHub -> Settings -> Environments -> create "release"
-#     Optionally add required reviewers so a tag cannot publish immediately.
-#
-# Release:
-#   1. Bump `version` in Cargo.toml.
-#   2. Commit and push.
-#   3. Push a matching tag, for example: git tag v0.1.1 && git push origin v0.1.1
-
 on:
   push:
     tags:
