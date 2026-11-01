@@ -3,6 +3,9 @@ name = "nitroget"
 version = "0.1.0"
 edition = "2024"
 description = "A Wayland desktop widget engine with .nitroget components"
+license-file = "LICENSE"
+readme = "README.md"
+repository = "https://github.com/pepperoni21/nitroget"
 
 [dependencies]
 anyhow = "1.0.104"
