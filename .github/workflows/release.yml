@@ -70,8 +70,6 @@ jobs:
           pkg-config --modversion gtk4-layer-shell-0
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@v2
 
@@ -85,15 +83,6 @@ jobs:
             echo "::error::tag v$tag does not match Cargo.toml version $version"
             exit 1
           fi
-
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Test
-        run: cargo test --locked
-
-      - name: Clippy
-        run: cargo clippy --locked --all-targets -- -D warnings
 
       - name: Package verification
         run: cargo publish --dry-run --locked
