@@ -1,0 +1,256 @@
+//! Single-owner application state and the message loop.
+//!
+//! GTK signal handlers, Lua timers, exec threads, the file watcher and the IPC
+//! socket never touch widget state directly. They send a `Msg`; one main-loop
+//! future owns `AppState` and applies messages with `&mut self`.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::time::SystemTime;
+
+use async_channel::Sender;
+use gtk::prelude::*;
+
+use crate::component::Placement as ComponentPlacement;
+use crate::instance::Instance;
+use crate::placement::Placement;
+use crate::reconcile;
+
+pub type WidgetKey = (PathBuf, Option<i32>);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WidgetState {
+    Active,
+    Parked,
+}
+
+pub struct Running {
+    pub instance: Instance,
+    pub mtime: SystemTime,
+    pub placement: ComponentPlacement,
+    pub state: WidgetState,
+}
+
+#[derive(Debug)]
+pub enum Msg {
+    /// Re-scan widgets and the config.
+    Sync,
+    /// A pointer/signal event with Lua code to run.
+    Click {
+        key: WidgetKey,
+        code: String,
+    },
+    Change {
+        key: WidgetKey,
+        code: String,
+        value: f64,
+    },
+    /// Forced re-render from `nitroget.refresh`.
+    Render {
+        key: WidgetKey,
+    },
+    Timer {
+        key: WidgetKey,
+        id: u64,
+    },
+    RegisterTimer {
+        key: WidgetKey,
+        id: u64,
+        ms: u64,
+        once: bool,
+    },
+    ClearTimer {
+        key: WidgetKey,
+        id: u64,
+    },
+    ExecDone {
+        key: WidgetKey,
+        id: u64,
+        ok: bool,
+        text: String,
+    },
+    Placement(PlacementMsg),
+    Quit,
+}
+
+#[derive(Debug)]
+pub enum PlacementMsg {
+    Toggle,
+    Start,
+    Cancel,
+    Done,
+    Press { connector: String, x: f64, y: f64 },
+    Motion { connector: String, x: f64, y: f64 },
+    Release,
+}
+
+pub struct AppState {
+    pub target: Option<PathBuf>,
+    pub config_path: PathBuf,
+    pub windowed: bool,
+    pub app: gtk::Application,
+    pub tx: Sender<Msg>,
+    pub widgets: HashMap<WidgetKey, Running>,
+    pub retired: Vec<Instance>,
+    pub placement: Placement,
+    /// Removes the control socket when the daemon shuts down cleanly.
+    socket: Option<crate::ipc::SocketGuard>,
+}
+
+impl AppState {
+    pub fn new(
+        target: Option<PathBuf>,
+        config_path: PathBuf,
+        windowed: bool,
+        app: gtk::Application,
+        tx: Sender<Msg>,
+        socket: Option<crate::ipc::SocketGuard>,
+    ) -> Self {
+        let placement = Placement::new(target.clone(), config_path.clone(), windowed, tx.clone());
+
+        Self {
+            target,
+            config_path,
+            windowed,
+            app,
+            tx,
+            widgets: HashMap::new(),
+            retired: Vec::new(),
+            placement,
+            socket,
+        }
+    }
+
+    pub fn handle(&mut self, msg: Msg) {
+        match msg {
+            Msg::Sync => self.sync(),
+            Msg::Click { key, code } => self.run(&key, &code, None),
+            Msg::Change { key, code, value } => self.run(&key, &code, Some(value)),
+            Msg::Render { key } => self.render(&key),
+            Msg::Timer { key, id } => self.fire_timer(&key, id),
+            Msg::RegisterTimer { key, id, ms, once } => self.register_timer(&key, id, ms, once),
+            Msg::ClearTimer { key, id } => self.clear_timer(&key, id),
+            Msg::ExecDone { key, id, ok, text } => self.exec_done(&key, id, ok, &text),
+            Msg::Placement(message) => self.placement(message),
+            Msg::Quit => {
+                // Drop the socket guard while the process still has a chance
+                // to clean up; GLib does not drop local futures on shutdown.
+                self.socket.take();
+                self.app.quit();
+            }
+        }
+    }
+
+    pub fn sync(&mut self) {
+        reconcile::sync(
+            &mut self.widgets,
+            &mut self.retired,
+            self.target.as_deref(),
+            &self.config_path,
+            self.windowed,
+            &self.app,
+            &self.tx,
+        );
+    }
+
+    fn run(&mut self, key: &WidgetKey, code: &str, event: Option<f64>) {
+        let Some(running) = self.active(key) else {
+            return;
+        };
+        running.instance.run_code(code, event);
+        running.instance.render_now();
+    }
+
+    /// Returns the widget only while it is on screen. Stale messages queued
+    /// before a widget was parked (a click, a timer, an exec result) must not
+    /// rebuild its tree and make the surface visible again.
+    fn active(&mut self, key: &WidgetKey) -> Option<&mut Running> {
+        self.widgets
+            .get_mut(key)
+            .filter(|running| running.state == WidgetState::Active)
+    }
+
+    fn render(&mut self, key: &WidgetKey) {
+        if let Some(running) = self.active(key) {
+            running.instance.render_now();
+        }
+    }
+
+    fn fire_timer(&mut self, key: &WidgetKey, id: u64) {
+        let Some(running) = self.active(key) else {
+            return;
+        };
+        let once = running.instance.fire_timer(id);
+        if once {
+            running.instance.clear_timer(id);
+        }
+        running.instance.render_now();
+    }
+
+    fn register_timer(&mut self, key: &WidgetKey, id: u64, ms: u64, once: bool) {
+        if let Some(running) = self.active(key) {
+            running.instance.register_timer(id, ms, once);
+        }
+    }
+
+    fn clear_timer(&mut self, key: &WidgetKey, id: u64) {
+        if let Some(running) = self.active(key) {
+            running.instance.clear_timer(id);
+        }
+    }
+
+    fn exec_done(&mut self, key: &WidgetKey, id: u64, ok: bool, text: &str) {
+        let Some(running) = self.active(key) else {
+            return;
+        };
+        running.instance.exec_done(id, ok, text);
+        running.instance.render_now();
+    }
+
+    fn placement(&mut self, message: PlacementMsg) {
+        match message {
+            PlacementMsg::Toggle => {
+                let live = self.live_monitors();
+                self.placement.toggle(&live);
+            }
+            PlacementMsg::Start => {
+                let live = self.live_monitors();
+                self.placement.start(&live);
+            }
+            PlacementMsg::Cancel => self.placement.cancel(),
+            PlacementMsg::Done => match self.placement.done() {
+                Ok(()) => self.sync(),
+                Err(e) => eprintln!("nitroget: {e:#}"),
+            },
+            PlacementMsg::Press { connector, x, y } => self.placement.press(&connector, x, y),
+            PlacementMsg::Motion { connector, x, y } => {
+                self.placement.drag_motion(&connector, x, y)
+            }
+            PlacementMsg::Release => self.placement.release(),
+        }
+    }
+
+    fn live_monitors(&self) -> HashMap<String, String> {
+        let display = gtk::gdk::Display::default();
+        let mut map = HashMap::new();
+
+        for running in self.widgets.values() {
+            let instance = &running.instance;
+            let Some(display) = display.as_ref() else {
+                continue;
+            };
+            let Some(surface) = instance.window.surface() else {
+                continue;
+            };
+            let Some(monitor) = display.monitor_at_surface(&surface) else {
+                continue;
+            };
+            let Some(connector) = monitor.connector() else {
+                continue;
+            };
+            map.insert(instance.comp.name.clone(), connector.to_string());
+        }
+
+        map
+    }
+}

@@ -1,0 +1,64 @@
+# Placement for one widget folder.
+# Copy to <widget folder>/config.toml and edit.
+# `config.toml` must be a regular file; symlinks are refused.
+#
+# Widgets are portable: their .nitroget files carry content and size, while
+# this file carries the machine-specific parts (position and monitor). Each
+# widget folder has its own config, so sets do not share layouts.
+
+[outputs]
+# Portable aliases. Placements can say "main"/"side" instead of a connector,
+# so the same widget config works on a laptop and on a desk setup.
+main = "eDP-1"
+side = "HDMI-A-1"
+
+[defaults]
+output = "main"      # alias, connector, "all", "primary", or omit for auto
+margin = 40
+
+[widgets.clock]
+anchor = "top-right"
+offset = [40, 40]
+
+[widgets.sysmon]
+anchor = "top-left"
+offset = [40, 40]
+
+[widgets.media]
+anchor = "bottom-right"
+offset = [40, 40]
+
+[widgets.counter]
+anchor = "bottom-left"
+offset = [40, 40]
+
+# One copy per monitor:
+#
+# [widgets.clock]
+# output = "all"
+
+# Keep a widget installed but hidden:
+#
+# [widgets.counter]
+# enabled = false
+
+# Override intrinsic size or layer for one widget:
+#
+# [widgets.media]
+# width = 440
+# layer = "overlay"
+
+# Per-monitor placement for replicated widgets:
+#
+# [widgets.clock]
+# output = "all"
+#
+# [widgets.clock.outputs.main]
+# anchor = "top-right"
+# offset = [40, 40]
+#
+# [widgets.clock.outputs.side]
+# anchor = "top-left"
+# offset = [20, 20]
+#
+# `nitroget placement` edits these entries with the mouse and writes them back.

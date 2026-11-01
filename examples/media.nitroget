@@ -1,0 +1,231 @@
+<widget name="media" width="400" height="200">
+  <box class="card">
+    <row class="now">
+      {#if #art > 0}
+        <image class="art" src="{art}" width="96" height="96" fit="cover" />
+      {:else}
+        <box class="art placeholder" width="96" height="96">
+          <label class="note">♪</label>
+        </box>
+      {/if}
+
+      <box class="meta" hexpand="true">
+        <label class="title" wrap="true" width="250">{title}</label>
+        <label class="artist">{artist}</label>
+        {#if #album > 0}
+          <label class="album">{album}</label>
+        {/if}
+      </box>
+    </row>
+
+        <bar class="progress" value="{progress}" max="100" />
+
+    <row class="controls">
+      <label class="time">{elapsed}</label>
+      <spacer />
+      <button class="ctl" valign="center" on:click="prev_track()">⏮</button>
+      <button class="ctl play" valign="center" on:click="toggle()">{play_icon}</button>
+      <button class="ctl" valign="center" on:click="next_track()">⏭</button>
+      <spacer />
+      <label class="time">{duration}</label>
+    </row>
+  </box>
+</widget>
+
+<style>
+  .card {
+    background-color: rgba(16, 16, 22, 0.88);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 20px;
+    padding: 18px 20px;
+  }
+
+  .art {
+    border-radius: 14px;
+    background-color: rgba(255, 255, 255, 0.05);
+  }
+
+  .placeholder {
+    background-color: rgba(255, 255, 255, 0.05);
+  }
+
+  .note {
+    font-size: 36px;
+    color: #52525b;
+  }
+
+  .meta {
+    margin-left: 14px;
+  }
+
+  .title {
+    font-size: 16px;
+    font-weight: 800;
+    color: #f4f4f5;
+  }
+
+  .artist {
+    font-size: 13px;
+    color: #a1a1aa;
+    margin-top: 3px;
+  }
+
+  .album {
+    font-size: 11px;
+    color: #71717a;
+    margin-top: 2px;
+  }
+
+  .progress {
+    margin-top: 14px;
+    min-height: 4px;
+  }
+
+  .progress trough {
+    min-height: 4px;
+    border-radius: 2px;
+    background-image: none;
+    background-color: rgba(255, 255, 255, 0.12);
+  }
+
+  .progress progress {
+    min-height: 4px;
+    border-radius: 2px;
+    background-image: none;
+    background-color: #f4f4f5;
+  }
+
+  .controls {
+    margin-top: 6px;
+  }
+
+  .time {
+    font-size: 11px;
+    color: #71717a;
+  }
+
+  .ctl {
+    background-image: none;
+    background-color: transparent;
+    border-radius: 16px;
+    min-width: 32px;
+    min-height: 32px;
+    padding: 0;
+    font-family: "Noto Sans Symbols", "Noto Sans Symbols 2", "DejaVu Sans", sans-serif;
+    font-size: 15px;
+    color: #d4d4d8;
+  }
+
+  .ctl:hover {
+    background-color: rgba(255, 255, 255, 0.10);
+  }
+
+  .play {
+    background-color: #f4f4f5;
+    color: #18181b;
+    margin: 0 8px;
+  }
+
+  .play:hover {
+    background-color: #ffffff;
+  }
+</style>
+
+<script>
+  local function sh(cmd)
+    local pipe = io.popen(cmd .. " 2>/dev/null")
+    if not pipe then return "" end
+    local out = pipe:read("*a")
+    pipe:close()
+    return (out:gsub("%s+$", ""))
+  end
+
+  local cache_dir = (os.getenv("XDG_CACHE_HOME") or (os.getenv("HOME") .. "/.cache"))
+    .. "/nitroget/art"
+  local last_url = nil
+  local cached_art = ""
+
+  local function url_decode(s)
+    return (s:gsub("%%(%x%x)", function(hex) return string.char(tonumber(hex, 16)) end))
+  end
+
+  -- Chromium/Spotify usually expose file:// art; some players expose http(s).
+  local function update_art(url)
+    if url == last_url then return end
+    last_url = url
+    art = ""
+
+    if url == "" then return end
+
+    if url:sub(1, 7) == "file://" then
+      art = url_decode(url:sub(8))
+      return
+    end
+
+    if url:match("^https?://") then
+      os.execute("mkdir -p '" .. cache_dir .. "'")
+      if cached_art ~= "" then os.remove(cached_art) end
+
+      local dest = cache_dir .. "/" .. tostring(os.time()) .. "-"
+        .. tostring(math.random(1000, 9999)) .. ".img"
+      cached_art = dest
+
+      local safe = url:gsub("'", "'\\''")
+      nitroget.exec("curl -fsSL --max-time 8 -o '" .. dest .. "' '" .. safe .. "'", function(ok)
+        if ok then art = dest end
+      end)
+    end
+  end
+
+  local function fmt_time(micro)
+    local seconds = math.floor((tonumber(micro) or 0) / 1000000)
+    if seconds < 0 then seconds = 0 end
+    return string.format("%d:%02d", math.floor(seconds / 60), seconds % 60)
+  end
+
+  local function tick()
+    local out = sh("playerctl metadata --format "
+      .. "'{{status}}:::{{title}}:::{{artist}}:::{{album}}:::{{mpris:artUrl}}:::{{position}}:::{{mpris:length}}'")
+
+    if out == "" then
+      title = "Nothing playing"
+      artist = "no media player on the bus"
+      album = ""
+      progress = 0
+      elapsed = "0:00"
+      duration = "0:00"
+      play_icon = " ▶"
+      update_art("")
+      return
+    end
+
+    local status, track, performer, record, url, pos, len =
+      out:match("^(.-):::(.-):::(.-):::(.-):::(.-):::(.-):::(.*)$")
+
+    title = (track and track ~= "") and track or "Unknown track"
+    artist = performer or ""
+    album = record or ""
+    elapsed = fmt_time(pos)
+    duration = fmt_time(len)
+
+    local position = tonumber(pos) or 0
+    local length = tonumber(len) or 0
+    progress = length > 0 and math.min(100, position / length * 100) or 0
+    play_icon = status == "Playing" and "⏸" or " ▶"
+
+    update_art(url or "")
+  end
+
+  local function refresh_soon()
+    nitroget.after(250, tick)
+    nitroget.after(800, tick)
+  end
+
+  function toggle() nitroget.run("playerctl play-pause"); refresh_soon() end
+  function next_track() nitroget.run("playerctl next"); refresh_soon() end
+  function prev_track() nitroget.run("playerctl previous"); refresh_soon() end
+
+  math.randomseed(os.time())
+  tick()
+  nitroget.every(1000, tick)
+</script>

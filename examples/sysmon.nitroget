@@ -1,0 +1,134 @@
+<widget name="sysmon" width="300" height="205">
+  <box class="card">
+    <row class="stat">
+      <label class="k">CPU</label>
+      <spacer />
+      <label class="v">{cpu}%</label>
+    </row>
+    <bar value="{cpu}" max="100" />
+
+    <row class="stat">
+      <label class="k">MEM</label>
+      <spacer />
+      <label class="v">{mem_used} / {mem_total} GiB</label>
+    </row>
+    <bar value="{mem_pct}" max="100" />
+
+    <row class="stat">
+      <label class="k">DISK</label>
+      <spacer />
+      <label class="v">{disk}%</label>
+    </row>
+    <bar value="{disk}" max="100" />
+  </box>
+</widget>
+
+<style>
+  .card {
+    background-color: rgba(18, 18, 24, 0.72);
+    border-radius: 18px;
+    padding: 16px 20px;
+  }
+
+  .stat {
+    margin-top: 10px;
+  }
+
+  .k {
+    font-size: 12px;
+    font-weight: 700;
+    color: #a1a1aa;
+  }
+
+  .v {
+    font-size: 12px;
+    color: #f4f4f5;
+  }
+
+  bar {
+    min-height: 7px;
+    margin-top: 5px;
+  }
+
+  bar trough {
+    min-height: 7px;
+    border-radius: 4px;
+    background-image: none;
+    background-color: rgba(255, 255, 255, 0.10);
+  }
+
+  bar progress {
+    min-height: 7px;
+    border-radius: 4px;
+    background-image: none;
+    background-color: #34d399;
+  }
+</style>
+
+<script>
+  local prev_total, prev_idle = 0, 0
+
+  local function cpu_percent()
+    local f = io.open("/proc/stat", "r")
+    if not f then return 0 end
+    local line = f:read("*l")
+    f:close()
+
+    local nums = {}
+    for n in line:gmatch("%d+") do
+      nums[#nums + 1] = tonumber(n)
+    end
+
+    local idle = (nums[4] or 0) + (nums[5] or 0)
+    local total = 0
+    for _, v in ipairs(nums) do total = total + v end
+
+    local dtotal = total - prev_total
+    local didle = idle - prev_idle
+    prev_total, prev_idle = total, idle
+
+    if dtotal <= 0 then return 0 end
+    return math.floor((1 - didle / dtotal) * 100 + 0.5)
+  end
+
+  local function memory()
+    local total, avail = 0, 0
+    local f = io.open("/proc/meminfo", "r")
+    if not f then return 0, 0 end
+
+    for line in f:lines() do
+      local key, value = line:match("^(%a+):%s+(%d+)")
+      if key == "MemTotal" then
+        total = tonumber(value)
+      elseif key == "MemAvailable" then
+        avail = tonumber(value)
+      end
+    end
+    f:close()
+
+    return total, total - avail
+  end
+
+  local function disk_percent()
+    local pipe = io.popen("df -P / 2>/dev/null")
+    if not pipe then return 0 end
+    local out = pipe:read("*a")
+    pipe:close()
+    return tonumber(out:match("(%d+)%%")) or 0
+  end
+
+  local function tick()
+    cpu = cpu_percent()
+
+    local total, used = memory()
+    mem_total = string.format("%.1f", total / 1048576)
+    mem_used = string.format("%.1f", used / 1048576)
+    mem_pct = total > 0 and math.floor(used / total * 100 + 0.5) or 0
+
+    disk = disk_percent()
+  end
+
+  cpu_percent() -- prime the counter
+  tick()
+  nitroget.every(2000, tick)
+</script>

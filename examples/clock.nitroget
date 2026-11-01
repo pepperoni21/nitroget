@@ -1,0 +1,49 @@
+<widget name="clock" width="320" height="150">
+  <box class="card">
+    <label class="time">{time}</label>
+    <row class="meta">
+      <label class="date">{date}</label>
+      <spacer />
+      <label class="zone">{zone}</label>
+    </row>
+  </box>
+</widget>
+
+<style>
+  .card {
+    background-color: rgba(18, 18, 24, 0.72);
+    border-radius: 18px;
+    padding: 18px 22px;
+  }
+
+  .time {
+    font-size: 44px;
+    font-weight: 800;
+    color: #f4f4f5;
+  }
+
+  .meta {
+    margin-top: 2px;
+  }
+
+  .date {
+    font-size: 14px;
+    color: #a1a1aa;
+  }
+
+  .zone {
+    font-size: 12px;
+    color: #71717a;
+  }
+</style>
+
+<script>
+  local function tick()
+    time = os.date("%H:%M")
+    date = os.date("%A, %d %B")
+    zone = os.date("%Z")
+  end
+
+  tick()
+  nitroget.every(1000, tick)
+</script>
