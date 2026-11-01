@@ -81,6 +81,12 @@ impl Placement {
         let local_x = global_x - target.x;
         let local_y = global_y - target.y;
 
+        let geometry = self
+            .overlays
+            .get(&target.connector)
+            .map(|overlay| overlay.usable_geometry())
+            .unwrap_or_else(|| target.geometry());
+
         let rect = layout::snap_rect(
             Rect {
                 x: (local_x as f64 - drag.grab_x).round() as i32,
@@ -88,7 +94,7 @@ impl Placement {
                 w: item.rect.w,
                 h: item.rect.h,
             },
-            target.geometry(),
+            geometry,
             GRID,
             EDGE_SNAP,
         );
@@ -98,17 +104,39 @@ impl Placement {
             drag.rect = rect;
         }
 
+        let Some(outline) = item.outline.clone() else {
+            return;
+        };
+        let Some(label) = item.label.clone() else {
+            return;
+        };
+
+        if let Some(parent) = outline
+            .parent()
+            .and_then(|parent| parent.downcast::<gtk::Fixed>().ok())
+        {
+            parent.remove(&outline);
+        }
+        if let Some(parent) = label
+            .parent()
+            .and_then(|parent| parent.downcast::<gtk::Fixed>().ok())
+        {
+            parent.remove(&label);
+        }
+
         for overlay in self.overlays.values_mut() {
-            if overlay.monitor.connector == target.connector {
-                overlay.ghost.set_size_request(rect.w, rect.h);
-                overlay.fixed.remove(&overlay.ghost);
-                overlay
-                    .fixed
-                    .put(&overlay.ghost, rect.x as f64, rect.y as f64);
-                overlay.ghost.set_visible(true);
-            } else {
-                overlay.ghost.set_visible(false);
-            }
+            overlay.outlines.retain(|widget| widget != &outline);
+            overlay.labels.retain(|widget| widget != &label);
+        }
+
+        if let Some(overlay) = self.overlays.get_mut(&target.connector) {
+            overlay.fixed.put(&outline, rect.x as f64, rect.y as f64);
+            overlay
+                .fixed
+                .put(&label, rect.x as f64 + 8.0, rect.y as f64 + 6.0);
+            overlay.outlines.push(outline);
+            overlay.labels.push(label);
+            overlay.layout_hint();
         }
     }
 
@@ -127,7 +155,13 @@ impl Placement {
             return;
         };
 
-        let (anchor, offset) = layout::nearest_anchor(drag.rect, target.geometry());
+        let (anchor, offset) = layout::nearest_anchor(
+            drag.rect,
+            self.overlays
+                .get(&drag.target)
+                .map(|overlay| overlay.usable_geometry())
+                .unwrap_or_else(|| target.geometry()),
+        );
         let key = if item.is_all {
             Key::PerOutput(target.key())
         } else {

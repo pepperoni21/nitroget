@@ -63,6 +63,9 @@ The three blocks are:
 what desktop widgets want. `background` is reserved for wallpaper daemons and
 usually receives no input.
 
+A template with a single top-level element expands that element to fill the
+configured surface, so its visible background matches `width` and `height`.
+
 Position and monitor are **not** part of the widget. They live in
 `config.toml` next to the widgets (for the default folder,
 `~/.config/nitroget/config.toml`; a custom `--widgets` folder gets its own).

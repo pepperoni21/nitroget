@@ -31,6 +31,13 @@ pub struct Running {
     pub state: WidgetState,
 }
 
+/// Where a running widget actually is, and how large GTK actually made it.
+pub struct LiveWidget {
+    pub connector: String,
+    pub width: i32,
+    pub height: i32,
+}
+
 #[derive(Debug)]
 pub enum Msg {
     /// Re-scan widgets and the config.
@@ -79,9 +86,20 @@ pub enum PlacementMsg {
     Start,
     Cancel,
     Done,
-    Press { connector: String, x: f64, y: f64 },
-    Motion { connector: String, x: f64, y: f64 },
+    Press {
+        connector: String,
+        x: f64,
+        y: f64,
+    },
+    Motion {
+        connector: String,
+        x: f64,
+        y: f64,
+    },
     Release,
+    /// Recompute outlines after the overlays have been mapped and their
+    /// usable-area size is known.
+    Reflow,
 }
 
 pub struct AppState {
@@ -210,11 +228,11 @@ impl AppState {
     fn placement(&mut self, message: PlacementMsg) {
         match message {
             PlacementMsg::Toggle => {
-                let live = self.live_monitors();
+                let live = self.live_widgets();
                 self.placement.toggle(&live);
             }
             PlacementMsg::Start => {
-                let live = self.live_monitors();
+                let live = self.live_widgets();
                 self.placement.start(&live);
             }
             PlacementMsg::Cancel => self.placement.cancel(),
@@ -227,10 +245,11 @@ impl AppState {
                 self.placement.drag_motion(&connector, x, y)
             }
             PlacementMsg::Release => self.placement.release(),
+            PlacementMsg::Reflow => self.placement.reflow(),
         }
     }
 
-    fn live_monitors(&self) -> HashMap<String, String> {
+    fn live_widgets(&self) -> HashMap<String, LiveWidget> {
         let display = gtk::gdk::Display::default();
         let mut map = HashMap::new();
 
@@ -248,7 +267,14 @@ impl AppState {
             let Some(connector) = monitor.connector() else {
                 continue;
             };
-            map.insert(instance.comp.name.clone(), connector.to_string());
+            map.insert(
+                instance.comp.name.clone(),
+                LiveWidget {
+                    connector: connector.to_string(),
+                    width: instance.window.width(),
+                    height: instance.window.height(),
+                },
+            );
         }
 
         map

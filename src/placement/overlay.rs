@@ -5,17 +5,50 @@ use std::collections::HashSet;
 use gtk::prelude::*;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
-use crate::layout::{MonitorInfo, Rect};
+use crate::layout::{Geometry, MonitorInfo, Rect};
 use crate::placement::Placement;
 use crate::state::{Msg, PlacementMsg};
+
+/// Distance from the bottom of the overlay surface to the hint. The overlay is
+/// positioned at the usable-area origin, so a panel/dock can shift its visible
+/// bottom; keep the controls clear of it.
+const HINT_BOTTOM_MARGIN: i32 = 128;
 
 pub(super) struct Overlay {
     pub(super) monitor: MonitorInfo,
     pub(super) window: gtk::Window,
     pub(super) fixed: gtk::Fixed,
-    pub(super) ghost: gtk::Box,
     pub(super) hint: gtk::Box,
     pub(super) outlines: Vec<gtk::Widget>,
+    pub(super) labels: Vec<gtk::Widget>,
+}
+
+impl Overlay {
+    /// The usable area the compositor gave this overlay. Layer-shell widgets
+    /// are positioned in the same space, so this is the correct coordinate
+    /// system for outlines and drags.
+    pub(super) fn usable_geometry(&self) -> Geometry {
+        Geometry {
+            x: 0,
+            y: 0,
+            width: self.window.width(),
+            height: self.window.height(),
+        }
+    }
+
+    /// True once the compositor has mapped the overlay and given it the
+    /// usable-area size that layer-shell widgets use.
+    pub(super) fn is_ready(&self) -> bool {
+        self.window.is_mapped() && self.window.width() > 1 && self.window.height() > 1
+    }
+
+    /// Keep the hint above the outlines and inside the usable area.
+    pub(super) fn layout_hint(&mut self) {
+        let x = self.window.width().saturating_sub(360) / 2;
+        let y = self.window.height().saturating_sub(HINT_BOTTOM_MARGIN);
+        self.fixed.remove(&self.hint);
+        self.fixed.put(&self.hint, x as f64, y as f64);
+    }
 }
 
 impl Placement {
@@ -44,10 +77,14 @@ impl Placement {
         window.init_layer_shell();
         window.set_namespace(Some("nitroget-placement"));
         window.set_layer(Layer::Overlay);
+        // Respect panels/docks the same way widget surfaces do (they use
+        // exclusive_zone 0). With all four anchors the compositor stretches
+        // this surface to the usable area, which is also the coordinate space
+        // layer-shell widgets are positioned in.
         for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
             window.set_anchor(edge, true);
         }
-        window.set_exclusive_zone(-1);
+        window.set_exclusive_zone(0);
         window.set_monitor(Some(&monitor.monitor));
         window.set_default_size(monitor.width, monitor.height);
 
@@ -58,12 +95,6 @@ impl Placement {
         monitor_label.add_css_class("nitroget-monitor");
         monitor_label.set_can_target(false);
         fixed.put(&monitor_label, 16.0, 12.0);
-
-        let ghost = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        ghost.add_css_class("nitroget-ghost");
-        ghost.set_can_target(false);
-        ghost.set_visible(false);
-        fixed.put(&ghost, 0.0, 0.0);
 
         let hint = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         hint.add_css_class("nitroget-hint");
@@ -78,7 +109,7 @@ impl Placement {
         fixed.put(
             &hint,
             ((monitor.width - 360) / 2) as f64,
-            (monitor.height - 64) as f64,
+            (monitor.height - HINT_BOTTOM_MARGIN) as f64,
         );
 
         {
@@ -147,15 +178,22 @@ impl Placement {
             window.add_controller(keys);
         }
 
+        {
+            let tx = tx.clone();
+            window.connect_map(move |_| {
+                let _ = tx.try_send(Msg::Placement(PlacementMsg::Reflow));
+            });
+        }
+
         window.present();
 
         Overlay {
             monitor: monitor.clone(),
             window,
             fixed,
-            ghost,
             hint,
             outlines: Vec::new(),
+            labels: Vec::new(),
         }
     }
 
@@ -172,7 +210,6 @@ impl Placement {
             overlay.window.set_child(Some(&overlay.fixed));
             overlay.fixed.set_visible(active);
             overlay.hint.set_visible(active);
-            overlay.ghost.set_visible(false);
 
             if active {
                 overlay.window.remove_css_class("nitroget-placement-parked");
@@ -210,14 +247,16 @@ impl Placement {
                 for child in overlay.outlines.drain(..) {
                     overlay.fixed.remove(&child);
                 }
-                overlay.ghost.set_visible(false);
+                for child in overlay.labels.drain(..) {
+                    overlay.fixed.remove(&child);
+                }
                 overlay.hint.set_visible(false);
                 overlay.window.queue_draw();
             }
             return;
         }
 
-        let mut created: Vec<(String, Rect, gtk::Widget)> = Vec::new();
+        let mut created: Vec<(usize, String, Rect, gtk::Widget, gtk::Widget)> = Vec::new();
 
         {
             let items = &self.items;
@@ -225,14 +264,19 @@ impl Placement {
                 for child in &overlay.outlines {
                     overlay.fixed.remove(child);
                 }
+                for child in &overlay.labels {
+                    overlay.fixed.remove(child);
+                }
             }
 
-            for item in items {
+            for (index, item) in items.iter().enumerate() {
                 let outline = gtk::Box::new(gtk::Orientation::Vertical, 0);
                 outline.add_css_class("nitroget-outline");
                 outline.set_can_target(false);
                 outline.set_size_request(item.rect.w, item.rect.h);
 
+                // The label is a sibling in the overlay, not a child of the
+                // outline: a long name must not enlarge the outline.
                 let label = gtk::Label::new(Some(&format!(
                     "{} · {}×{}",
                     item.name, item.rect.w, item.rect.h
@@ -240,36 +284,46 @@ impl Placement {
                 label.add_css_class("nitroget-outline-label");
                 label.set_halign(gtk::Align::Start);
                 label.set_valign(gtk::Align::Start);
-                label.set_margin_start(8);
-                label.set_margin_top(6);
-                outline.append(&label);
+                label.set_can_target(false);
 
-                created.push((item.monitor.clone(), item.rect, outline.upcast()));
+                created.push((
+                    index,
+                    item.monitor.clone(),
+                    item.rect,
+                    outline.upcast(),
+                    label.upcast(),
+                ));
             }
         }
 
         for overlay in self.overlays.values_mut() {
             overlay.outlines.clear();
-            overlay.ghost.set_visible(false);
+            overlay.labels.clear();
         }
 
-        for (connector, rect, widget) in created {
-            if let Some(overlay) = self.overlays.get_mut(&connector) {
-                overlay.fixed.put(&widget, rect.x as f64, rect.y as f64);
-                overlay.outlines.push(widget);
+        for (index, connector, rect, outline, label) in &created {
+            if let Some(overlay) = self.overlays.get_mut(connector) {
+                overlay.fixed.put(outline, rect.x as f64, rect.y as f64);
+                overlay.outlines.push(outline.clone());
+            }
+            if let Some(item) = self.items.get_mut(*index) {
+                item.outline = Some(outline.clone());
+                item.label = Some(label.clone());
+            }
+        }
+
+        for (_, connector, rect, _, label) in &created {
+            if let Some(overlay) = self.overlays.get_mut(connector) {
+                overlay
+                    .fixed
+                    .put(label, rect.x as f64 + 8.0, rect.y as f64 + 6.0);
+                overlay.labels.push(label.clone());
             }
         }
 
         for overlay in self.overlays.values_mut() {
-            // Keep ghosts and hints above the outlines.
-            overlay.fixed.remove(&overlay.ghost);
-            overlay.fixed.put(&overlay.ghost, 0.0, 0.0);
-            overlay.fixed.remove(&overlay.hint);
-            overlay.fixed.put(
-                &overlay.hint,
-                ((overlay.monitor.width - 360) / 2) as f64,
-                (overlay.monitor.height - 64) as f64,
-            );
+            // Keep the hint above the outlines.
+            overlay.layout_hint();
         }
     }
 
@@ -315,12 +369,6 @@ fn install_css() {
             background-color: rgba(0, 0, 0, 0.65);
             padding: 2px 7px;
             border-radius: 6px;
-        }
-
-        .nitroget-ghost {
-            border: 2px solid #818cf8;
-            border-radius: 12px;
-            background-color: rgba(99, 102, 241, 0.25);
         }
 
         .nitroget-monitor {

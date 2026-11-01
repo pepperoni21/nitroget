@@ -832,6 +832,17 @@ impl Instance {
             }
         }
 
+        // A single top-level element is the widget's visible surface. Let it
+        // fill the configured window; otherwise its background can be smaller
+        // than the layer surface and placement outlines no longer match the
+        // widget on screen.
+        if nodes.len() == 1 {
+            for widget in nodes[0].widgets() {
+                widget.set_hexpand(true);
+                widget.set_vexpand(true);
+            }
+        }
+
         Ok(Tree {
             root: root.upcast(),
             nodes,

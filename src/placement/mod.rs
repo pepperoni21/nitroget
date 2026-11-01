@@ -1,8 +1,9 @@
 //! Mouse placement mode.
 //!
 //! A modal overlay on the `overlay` layer, one per monitor, shows dashed
-//! outlines at each widget's position. Dragging moves a ghost; dropping stages
-//! the change. `Done` writes everything to `config.toml` through `toml_edit`.
+//! outlines at each widget's position. Dragging moves the outline; dropping
+//! stages the change. `Done` writes everything to `config.toml` through
+//! `toml_edit`.
 //!
 //! Widgets themselves are never moved during the drag: layer surfaces cannot be
 //! repositioned freely and remapping them is both slow and, on some
@@ -13,14 +14,15 @@ mod overlay;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::Result;
 use async_channel::Sender;
 
-use crate::component::Component;
+use crate::component::{Component, Placement as ComponentPlacement};
 use crate::config::{self, PlacementChange};
 use crate::layout::{self, MonitorInfo, Rect};
-use crate::state::Msg;
+use crate::state::{LiveWidget, Msg, PlacementMsg};
 
 use overlay::Overlay;
 
@@ -38,6 +40,11 @@ pub(super) struct Item {
     pub(super) monitor: String,
     pub(super) rect: Rect,
     pub(super) key: Key,
+    /// Effective placement (including the actual mapped size).
+    pub(super) placement: ComponentPlacement,
+    /// The outline and label currently drawn for this item.
+    pub(super) outline: Option<gtk::Widget>,
+    pub(super) label: Option<gtk::Widget>,
 }
 
 #[derive(Clone)]
@@ -85,7 +92,7 @@ impl Placement {
         }
     }
 
-    pub fn toggle(&mut self, live: &HashMap<String, String>) {
+    pub fn toggle(&mut self, live: &HashMap<String, LiveWidget>) {
         if self.active {
             self.cancel();
         } else {
@@ -93,7 +100,7 @@ impl Placement {
         }
     }
 
-    pub fn start(&mut self, live: &HashMap<String, String>) {
+    pub fn start(&mut self, live: &HashMap<String, LiveWidget>) {
         if self.active {
             return;
         }
@@ -126,9 +133,9 @@ impl Placement {
         // the running instances which monitor they actually landed on.
         for comp in &mut components {
             if comp.placement.output.is_none()
-                && let Some(connector) = live.get(&comp.name)
+                && let Some(info) = live.get(&comp.name)
             {
-                comp.placement.output = Some(connector.clone());
+                comp.placement.output = Some(info.connector.clone());
             }
         }
 
@@ -139,8 +146,16 @@ impl Placement {
             .collect();
 
         let expanded = layout::expand(components, &config, &monitors);
-        let mut items = Vec::new();
 
+        self.monitors = monitors;
+        self.staged.clear();
+        self.drag = None;
+        self.active = true;
+
+        let monitors = self.monitors.clone();
+        self.ensure_overlays(&monitors);
+
+        let mut items = Vec::new();
         for comp in expanded {
             let Some(index) = layout::resolve_monitor(&comp.placement, &monitors) else {
                 eprintln!(
@@ -150,28 +165,94 @@ impl Placement {
                 continue;
             };
             let monitor = &monitors[index];
+            // Prefer the size GTK actually gave the mapped surface. The
+            // declared size is only a request and can differ after content or
+            // theme changes; an outline based on it would not match the widget.
+            let mut placement = comp.placement.clone();
+            if let Some(info) = live.get(&comp.name)
+                && info.width > 0
+                && info.height > 0
+            {
+                placement.width = info.width;
+                placement.height = info.height;
+            }
+
+            // Use the overlay's usable area when it is already mapped (a
+            // repeated placement session). On the first session it is mapped
+            // asynchronously by the reflow below.
+            let geometry = self
+                .overlays
+                .get(&monitor.connector)
+                .filter(|overlay| overlay.is_ready())
+                .map(|overlay| overlay.usable_geometry())
+                .unwrap_or_else(|| monitor.geometry());
+
             items.push(Item {
                 name: comp.name.clone(),
                 is_all: all_names.contains(&comp.name),
                 monitor: monitor.connector.clone(),
-                rect: layout::rect_for(&comp.placement, monitor.geometry()),
+                rect: layout::rect_for(&placement, geometry),
                 key: if all_names.contains(&comp.name) {
                     Key::PerOutput(monitor.key())
                 } else {
                     Key::Base
                 },
+                placement: placement.clone(),
+                outline: None,
+                label: None,
             });
         }
 
         self.items = items;
-        self.monitors = monitors;
-        self.staged.clear();
-        self.drag = None;
-        self.active = true;
-
-        let monitors = self.monitors.clone();
-        self.ensure_overlays(&monitors);
         self.set_ui_active(true);
+
+        // Do not paint outlines with the provisional monitor geometry: on the
+        // first placement session the overlay is not mapped yet, so its usable
+        // area (and therefore the correct positions) is unknown.
+        let ready = self.items.iter().all(|item| {
+            self.overlays
+                .get(&item.monitor)
+                .is_some_and(|overlay| overlay.is_ready())
+        });
+        if ready {
+            self.render();
+        }
+
+        // The map signal normally triggers this immediately; the timers are a
+        // fallback for compositors that configure late.
+        for delay in [100, 400] {
+            let tx = self.tx.clone();
+            gtk::glib::timeout_add_local_once(Duration::from_millis(delay), move || {
+                let _ = tx.try_send(Msg::Placement(PlacementMsg::Reflow));
+            });
+        }
+    }
+
+    /// Recompute outlines in the overlays' actual coordinate space.
+    pub fn reflow(&mut self) {
+        if !self.active || self.drag.is_some() {
+            return;
+        }
+
+        if !self.items.iter().all(|item| {
+            self.overlays
+                .get(&item.monitor)
+                .is_some_and(|overlay| overlay.is_ready())
+        }) {
+            return;
+        }
+
+        for item in &mut self.items {
+            let Some(overlay) = self.overlays.get(&item.monitor) else {
+                continue;
+            };
+            let usable = overlay.usable_geometry();
+            if usable.width <= 0 || usable.height <= 0 {
+                continue;
+            }
+            item.rect = layout::rect_for(&item.placement, usable);
+        }
+
         self.render();
     }
 
