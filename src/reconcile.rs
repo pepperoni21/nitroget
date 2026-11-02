@@ -8,7 +8,7 @@ use async_channel::Sender;
 
 use crate::component::{Component, Placement};
 use crate::config;
-use crate::discovery::{collect_paths, mtime_of};
+use crate::discovery::{collect_paths, source_mtime};
 use crate::instance::Instance;
 use crate::layout;
 use crate::state::{Msg, Running, WidgetKey, WidgetState};
@@ -169,7 +169,7 @@ pub fn sync(
         let path = comp.path.clone();
         let key = (path.clone(), comp.placement.output_index);
         let placement = comp.placement.clone();
-        let mtime = mtime_of(&path);
+        let mtime = source_mtime(&path);
 
         let decision = decide(
             widgets.get(&key).map(|running| Existing {

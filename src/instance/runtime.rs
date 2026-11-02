@@ -1,5 +1,6 @@
 //! Lua runtime, timers and exec callbacks for one widget.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
@@ -53,9 +54,28 @@ fn remove_callback(lua: &Lua, id: u64) -> mlua::Result<()> {
     Ok(())
 }
 
+fn configure_package(lua: &Lua, dirs: &[PathBuf]) -> mlua::Result<()> {
+    let package: Table = lua.globals().get("package")?;
+    let existing: String = package.get("path").unwrap_or_default();
+    let mut paths = Vec::new();
+
+    for dir in dirs {
+        let dir = dir.to_string_lossy();
+        paths.push(format!("{dir}/?.lua"));
+        paths.push(format!("{dir}/?/init.lua"));
+    }
+    if !existing.is_empty() {
+        paths.push(existing);
+    }
+
+    package.set("path", paths.join(";"))?;
+    Ok(())
+}
+
 impl Instance {
     pub(super) fn register_lua(&mut self) -> Result<()> {
         let lua = &self.lua;
+        configure_package(lua, &self.comp.lua_dirs)?;
         let nt = lua.create_table()?;
 
         {
@@ -284,5 +304,26 @@ impl Instance {
         {
             eprintln!("nitroget: exec callback error: {e}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn require_loads_nested_modules() {
+        let dir = std::env::temp_dir().join(format!("nitroget-require-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let lib = dir.join("lib");
+        std::fs::create_dir_all(&lib).unwrap();
+        std::fs::write(lib.join("foo.lua"), "return \"ok\"").unwrap();
+
+        let lua = Lua::new();
+        configure_package(&lua, std::slice::from_ref(&dir)).unwrap();
+        let value: String = lua.load("return require(\"lib.foo\")").eval().unwrap();
+
+        assert_eq!(value, "ok");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

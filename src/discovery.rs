@@ -130,6 +130,44 @@ pub fn mtime_of(path: &Path) -> SystemTime {
         .unwrap_or(UNIX_EPOCH)
 }
 
+pub fn lua_mtime(dir: &Path) -> SystemTime {
+    lua_mtime_at(dir, 0)
+}
+
+fn lua_mtime_at(dir: &Path, depth: usize) -> SystemTime {
+    if depth > 8 {
+        return UNIX_EPOCH;
+    }
+
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return UNIX_EPOCH;
+    };
+
+    let mut newest = UNIX_EPOCH;
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        let path = entry.path();
+
+        if file_type.is_dir() {
+            newest = newest.max(lua_mtime_at(&path, depth + 1));
+        } else if file_type.is_file() && path.extension().is_some_and(|ext| ext == "lua") {
+            newest = newest.max(mtime_of(&path));
+        }
+    }
+
+    newest
+}
+
+pub fn source_mtime(path: &Path) -> SystemTime {
+    let mut newest = mtime_of(path);
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        newest = newest.max(lua_mtime(parent));
+    }
+    newest
+}
+
 pub fn short_hash(value: &str) -> String {
     let mut hash = Fnv::new();
     hash.write(value.as_bytes());
@@ -186,6 +224,24 @@ mod tests {
 
         assert_eq!(config_path_for(&dir), dir.join("config.toml"));
         assert_eq!(config_path_for(&file), dir.join("config.toml"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn source_mtime_includes_nested_lua_files() {
+        let dir = std::env::temp_dir().join(format!("nitroget-lua-mtime-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let lib = dir.join("lib");
+        std::fs::create_dir_all(&lib).unwrap();
+
+        let widget = dir.join("clock.nitroget");
+        let lua = lib.join("helper.lua");
+        std::fs::write(&widget, "").unwrap();
+        std::fs::write(&lua, "").unwrap();
+
+        assert_eq!(lua_mtime(&dir), mtime_of(&lua));
+        assert_eq!(source_mtime(&widget), mtime_of(&widget).max(mtime_of(&lua)));
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

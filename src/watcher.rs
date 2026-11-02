@@ -5,7 +5,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use async_channel::Sender;
 
-use crate::discovery::{Fnv, collect_paths};
+use crate::discovery::{Fnv, collect_paths, source_mtime};
 use crate::layout;
 use crate::state::Msg;
 
@@ -36,14 +36,12 @@ fn fingerprint(target: Option<&Path>, config_path: &Path) -> u64 {
         Ok(paths) => {
             for path in &paths {
                 hash.write(path.to_string_lossy().as_bytes());
-                if let Ok(modified) = std::fs::metadata(path).and_then(|m| m.modified()) {
-                    hash.write_u128(
-                        modified
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_nanos(),
-                    );
-                }
+                hash.write_u128(
+                    source_mtime(path)
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos(),
+                );
             }
         }
         Err(_) => hash.write(b"<unreadable>"),

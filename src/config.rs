@@ -491,6 +491,7 @@ mod tests {
             template: Vec::new(),
             css: String::new(),
             script: String::new(),
+            lua_dirs: Vec::new(),
             notes: Vec::new(),
         }
     }

@@ -17,6 +17,7 @@ widget.
 - [Styles](#styles)
   - [Following the GTK theme](#following-the-gtk-theme)
 - [Script](#script)
+  - [External scripts](#external-scripts)
   - [API](#api)
 - [Reloading](#reloading)
 - [Validation](#validation)
@@ -48,7 +49,7 @@ The three blocks are:
 | --- | --- | --- |
 | `<widget>` | yes | structure, plus intrinsic size and layer |
 | `<style>` | no | GTK CSS, scoped to this widget |
-| `<script>` | no | Lua, runs once when the widget loads |
+| `<script>` | no | Lua, inline or loaded with `src`; runs once when the widget loads |
 
 ## The `<widget>` root
 
@@ -354,6 +355,29 @@ helpers and private state.
 `io`, `os` and shell commands are available, because widgets are local code you
 chose to run. Treat downloaded widgets like any script.
 
+### External scripts
+
+Keep a long script in its own file:
+
+```html
+<script src="widget.lua"></script>
+```
+
+`src` is resolved relative to the `.nitroget` file and must stay inside the
+widget folder. The file runs once when the widget loads, like an inline script.
+
+Scripts can use `require` for other Lua files:
+
+```lua
+local helpers = require("lib.helpers")
+local ui = require("ui")
+```
+
+`require("lib.helpers")` loads `lib/helpers.lua`, while `require("ui")` loads
+`ui.lua` or `ui/init.lua`. Modules are searched in the widget folder and in the
+folder containing the entry script, so nested modules work. Editing a `.lua`
+file in the widget folder reloads the widget.
+
 ### API
 
 | Call | Description |
@@ -413,8 +437,8 @@ then start with the new folder.
 
 ## Reloading
 
-Saving a widget file reloads it after about 400 ms: the Lua script runs again,
-timers restart and Lua state is reset.
+Saving a widget file or any `.lua` file in its folder reloads it after about
+400 ms: the Lua script runs again, timers restart and Lua state is reset.
 
 Changing the anchor/offset in `config.toml` or `nitroget placement` moves the
 window without reloading the script, so widget state survives a move. Changing
@@ -426,9 +450,10 @@ monitor, layer or size builds a new surface and reloads the widget.
 nitroget check --widgets ~/.config/nitroget
 ```
 
-This parses the template, compiles the Lua, applies the config and prints the
-effective placement of each widget. Errors and ignored attributes are reported
-with the file name.
+This parses the template, loads and compiles the Lua (including `src` scripts),
+applies the config and prints the effective placement of each widget. Errors and
+ignored attributes are reported with the file name. Modules loaded with
+`require` are resolved when the widget runs.
 
 ## Limitations
 
