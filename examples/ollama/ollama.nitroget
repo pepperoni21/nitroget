@@ -17,7 +17,7 @@
     {/if}
 
     {#if #messages > 0}
-      <scroll class="transcript" height="340" follow="true">
+      <scroll class="transcript" max-height="340" follow="true">
         <box class="messages" gap="8">
           {#each messages as message}
             <box class="message {message.role}">

@@ -910,6 +910,11 @@ fn build_element(inst: &mut Instance, element: &TplElement) -> Result<RNode> {
             scrolled.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
             scrolled.set_hexpand(true);
 
+            if let Some(max_height) = number_attr(inst, element, "max-height")? {
+                scrolled.set_propagate_natural_height(true);
+                scrolled.set_max_content_height((max_height as i32).max(1));
+            }
+
             let children = build_nodes(inst, &element.children)?;
             if children.len() == 1 {
                 let widgets = children[0].widgets();
