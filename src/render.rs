@@ -28,6 +28,26 @@ impl Tree {
         }
         Ok(())
     }
+
+    pub fn has_visible_entry(&self) -> bool {
+        self.nodes.iter().any(RNode::has_visible_entry)
+    }
+}
+
+fn widget_visible(widget: &gtk::Widget) -> bool {
+    let mut current = Some(widget.clone());
+
+    while let Some(widget) = current {
+        if widget.is::<gtk::Window>() {
+            break;
+        }
+        if !widget.is_visible() {
+            return false;
+        }
+        current = widget.parent();
+    }
+
+    true
 }
 
 pub enum RNode {
@@ -53,6 +73,15 @@ impl RNode {
             RNode::Text(text) => vec![text.label.clone().upcast()],
             RNode::If(branch) => vec![branch.container.clone().upcast()],
             RNode::Each(each) => vec![each.container.clone().upcast()],
+        }
+    }
+
+    fn has_visible_entry(&self) -> bool {
+        match self {
+            RNode::Element(element) => element.has_visible_entry(),
+            RNode::Text(_) => false,
+            RNode::If(branch) => branch.children.iter().any(RNode::has_visible_entry),
+            RNode::Each(each) => each.rows.iter().flatten().any(RNode::has_visible_entry),
         }
     }
 }
@@ -116,9 +145,32 @@ enum RKind {
         src: String,
         last: String,
     },
+    Entry {
+        entry: gtk::Entry,
+        text: String,
+        last: String,
+        suppress: Rc<Cell<bool>>,
+    },
+    Select {
+        dropdown: gtk::DropDown,
+        options: String,
+        selected: String,
+        last_options: Vec<String>,
+        last_selected: Option<String>,
+        suppress: Rc<Cell<bool>>,
+    },
+    Scroll,
 }
 
 impl RElement {
+    fn has_visible_entry(&self) -> bool {
+        if matches!(&self.kind, RKind::Entry { .. }) && widget_visible(&self.widget) {
+            return true;
+        }
+
+        self.children.iter().any(RNode::has_visible_entry)
+    }
+
     fn update(&mut self, inst: &mut Instance) -> Result<()> {
         self.update_common(inst)?;
 
@@ -189,6 +241,70 @@ impl RElement {
                     *last = path;
                 }
             }
+
+            RKind::Entry {
+                entry,
+                text,
+                last,
+                suppress,
+            } => {
+                let value = inst.interp(text)?;
+                if value != *last {
+                    if value != entry.text() {
+                        suppress.set(true);
+                        entry.set_text(&value);
+                        suppress.set(false);
+                    }
+                    *last = value;
+                }
+            }
+
+            RKind::Select {
+                dropdown,
+                options,
+                selected,
+                last_options,
+                last_selected,
+                suppress,
+            } => {
+                let values: Vec<String> = eval_list(inst, options)?
+                    .iter()
+                    .map(value_to_string)
+                    .collect();
+                let options_changed = values != *last_options;
+
+                if options_changed {
+                    suppress.set(true);
+                    let refs: Vec<&str> = values.iter().map(String::as_str).collect();
+                    let list = gtk::StringList::new(&refs);
+                    dropdown.set_model(Some(&list));
+                    suppress.set(false);
+                    *last_options = values.clone();
+                }
+
+                let selected_value = value_to_string(&inst.eval_value(selected)?);
+                let index = values.iter().position(|value| *value == selected_value);
+                let active = if values.is_empty() {
+                    None
+                } else {
+                    Some(values[index.unwrap_or(0)].clone())
+                };
+
+                if options_changed || active != *last_selected {
+                    suppress.set(true);
+                    if values.is_empty() {
+                        dropdown.set_selected(gtk::INVALID_LIST_POSITION);
+                    } else {
+                        dropdown.set_selected(index.unwrap_or(0) as u32);
+                    }
+                    suppress.set(false);
+                    *last_selected = active;
+                }
+
+                dropdown.set_sensitive(!values.is_empty());
+            }
+
+            RKind::Scroll => {}
         }
 
         for child in &mut self.children {
@@ -673,6 +789,167 @@ fn build_element(inst: &mut Instance, element: &TplElement) -> Result<RNode> {
             )
         }
 
+        "entry" => {
+            let raw = element.attr("text").unwrap_or("").to_string();
+            let text = inst.interp(&raw)?;
+
+            let entry = gtk::Entry::new();
+            entry.set_hexpand(true);
+            entry.set_text(&text);
+
+            if let Some(placeholder) = element.attr("placeholder") {
+                let placeholder = inst.interp(placeholder)?;
+                entry.set_placeholder_text(Some(&placeholder));
+            }
+
+            let suppress = Rc::new(Cell::new(false));
+            if let Some(code) = element.attr("on:change").map(str::to_string) {
+                let tx = inst.tx.clone();
+                let key = inst.key.clone();
+                let guard = suppress.clone();
+                entry.connect_changed(move |entry| {
+                    if guard.get() {
+                        return;
+                    }
+                    let _ = tx.try_send(Msg::Text {
+                        key: key.clone(),
+                        code: code.clone(),
+                        value: entry.text().to_string(),
+                    });
+                });
+            }
+            if let Some(code) = element.attr("on:submit").map(str::to_string) {
+                let tx = inst.tx.clone();
+                let key = inst.key.clone();
+                entry.connect_activate(move |entry| {
+                    let _ = tx.try_send(Msg::Text {
+                        key: key.clone(),
+                        code: code.clone(),
+                        value: entry.text().to_string(),
+                    });
+                });
+            }
+
+            (
+                entry.clone().upcast(),
+                RKind::Entry {
+                    entry,
+                    text: raw,
+                    last: text,
+                    suppress,
+                },
+                Vec::new(),
+            )
+        }
+
+        "select" => {
+            let options = element.attr("options").unwrap_or("{}").to_string();
+            let selected = element.attr("selected").unwrap_or("\"\"").to_string();
+            let values: Vec<String> = eval_list(inst, &options)?
+                .iter()
+                .map(value_to_string)
+                .collect();
+            let selected_value = value_to_string(&inst.eval_value(&selected)?);
+            let index = values.iter().position(|value| *value == selected_value);
+
+            let dropdown = {
+                let refs: Vec<&str> = values.iter().map(String::as_str).collect();
+                gtk::DropDown::from_strings(&refs)
+            };
+            dropdown.set_hexpand(true);
+            if values.is_empty() {
+                dropdown.set_selected(gtk::INVALID_LIST_POSITION);
+            } else {
+                dropdown.set_selected(index.unwrap_or(0) as u32);
+            }
+
+            let suppress = Rc::new(Cell::new(false));
+            if let Some(code) = element.attr("on:change").map(str::to_string) {
+                let tx = inst.tx.clone();
+                let key = inst.key.clone();
+                let guard = suppress.clone();
+                dropdown.connect_selected_notify(move |dropdown| {
+                    if guard.get() {
+                        return;
+                    }
+                    let value = dropdown
+                        .selected_item()
+                        .and_then(|item| item.downcast::<gtk::StringObject>().ok())
+                        .map(|item| item.string().to_string())
+                        .unwrap_or_default();
+                    let _ = tx.try_send(Msg::Text {
+                        key: key.clone(),
+                        code: code.clone(),
+                        value,
+                    });
+                });
+            }
+
+            let last_selected = if values.is_empty() {
+                None
+            } else {
+                Some(values[index.unwrap_or(0)].clone())
+            };
+
+            (
+                dropdown.clone().upcast(),
+                RKind::Select {
+                    dropdown,
+                    options,
+                    selected,
+                    last_options: values,
+                    last_selected,
+                    suppress,
+                },
+                Vec::new(),
+            )
+        }
+
+        "scroll" => {
+            let scrolled = gtk::ScrolledWindow::new();
+            scrolled.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+            scrolled.set_hexpand(true);
+
+            let children = build_nodes(inst, &element.children)?;
+            if children.len() == 1 {
+                let widgets = children[0].widgets();
+                if widgets.len() == 1 {
+                    scrolled.set_child(Some(&widgets[0]));
+                } else {
+                    let container = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                    for widget in widgets {
+                        container.append(&widget);
+                    }
+                    scrolled.set_child(Some(&container));
+                }
+            } else if !children.is_empty() {
+                let container = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                append_nodes(&container, &children);
+                scrolled.set_child(Some(&container));
+            }
+
+            if element.attr("follow").is_some_and(|value| value == "true") {
+                let adjustment = scrolled.vadjustment();
+                let tracking = Rc::new(Cell::new(true));
+
+                let position = tracking.clone();
+                adjustment.connect_value_changed(move |adjustment| {
+                    let at_bottom =
+                        adjustment.value() + adjustment.page_size() >= adjustment.upper() - 1.0;
+                    position.set(at_bottom);
+                });
+
+                adjustment.connect_changed(move |adjustment| {
+                    if tracking.get() {
+                        let bottom = (adjustment.upper() - adjustment.page_size()).max(0.0);
+                        adjustment.set_value(bottom);
+                    }
+                });
+            }
+
+            (scrolled.upcast(), RKind::Scroll, children)
+        }
+
         "spacer" => {
             let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
             spacer.set_hexpand(true);
@@ -821,6 +1098,7 @@ impl Instance {
                 );
             }
             self.tree = Some(tree);
+            self.sync_keyboard_mode();
             return;
         }
 
@@ -828,6 +1106,7 @@ impl Instance {
             Ok(tree) => {
                 self.window.set_child(Some(&tree.root));
                 self.tree = Some(tree);
+                self.sync_keyboard_mode();
             }
             Err(e) => {
                 eprintln!(
@@ -841,6 +1120,7 @@ impl Instance {
                 root.append(&label);
                 self.window.set_child(Some(&root));
                 self.tree = None;
+                self.sync_keyboard_mode();
             }
         }
     }

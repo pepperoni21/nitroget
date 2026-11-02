@@ -507,4 +507,34 @@ mod tests {
         assert!(error.to_string().contains("inside the widget folder"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
+
+    fn lua_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                lua_files(&path, out);
+            } else if path.extension().is_some_and(|ext| ext == "lua") {
+                out.push(path);
+            }
+        }
+    }
+
+    #[test]
+    fn example_lua_files_compile() {
+        let mut files = Vec::new();
+        lua_files(Path::new("examples"), &mut files);
+
+        let lua = mlua::Lua::new();
+        for file in files {
+            let source = std::fs::read_to_string(&file).unwrap();
+            lua.load(&source)
+                .set_name(file.to_string_lossy().to_string())
+                .into_function()
+                .unwrap();
+        }
+    }
 }

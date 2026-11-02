@@ -1,9 +1,11 @@
 mod runtime;
 mod view;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::process::Child;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use gtk::prelude::*;
@@ -36,6 +38,7 @@ pub struct Instance {
     pub lua: Lua,
 
     pub timers: HashMap<u64, TimerEntry>,
+    pub streams: Rc<RefCell<HashMap<u64, Arc<Mutex<Child>>>>>,
 
     /// Persistent render tree; rebuilt only when the component changes.
     pub tree: Option<crate::render::Tree>,
@@ -45,6 +48,7 @@ pub struct Instance {
     pub display: gtk::gdk::Display,
     pub provider: Option<gtk::CssProvider>,
     pub use_layer_shell: bool,
+    pub keyboard_active: bool,
     pub tx: async_channel::Sender<Msg>,
 }
 
@@ -76,11 +80,13 @@ impl Instance {
             window,
             lua: Lua::new(),
             timers: HashMap::new(),
+            streams: Rc::new(RefCell::new(HashMap::new())),
             tree: None,
             textures: HashMap::new(),
             display,
             provider: None,
             use_layer_shell,
+            keyboard_active: false,
             tx,
         };
 
@@ -142,6 +148,7 @@ impl Instance {
         }
 
         self.drain_timers();
+        self.drain_streams();
         self.tree = None;
         self.textures.clear();
 
@@ -180,11 +187,54 @@ impl Instance {
             entry.cancel();
         }
     }
+
+    pub fn drain_streams(&mut self) {
+        for (_, child) in self.streams.borrow_mut().drain() {
+            if let Ok(mut child) = child.lock() {
+                let _ = child.kill();
+            }
+        }
+    }
+
+    pub fn cancel_stream(&mut self, id: u64) {
+        if let Some(child) = self.streams.borrow_mut().remove(&id)
+            && let Ok(mut child) = child.lock()
+        {
+            let _ = child.kill();
+        }
+        if let Err(e) = runtime::remove_stream_callbacks(&self.lua, id) {
+            eprintln!("nitroget: cannot clear stream {id}: {e}");
+        }
+    }
+
+    pub fn sync_keyboard_mode(&mut self) {
+        if !self.use_layer_shell {
+            return;
+        }
+
+        let active = self
+            .tree
+            .as_ref()
+            .is_some_and(|tree| tree.has_visible_entry());
+        if self.keyboard_active == active {
+            return;
+        }
+
+        use gtk4_layer_shell::{KeyboardMode, LayerShell};
+
+        self.keyboard_active = active;
+        self.window.set_keyboard_mode(if active {
+            KeyboardMode::OnDemand
+        } else {
+            KeyboardMode::None
+        });
+    }
 }
 
 impl Drop for Instance {
     fn drop(&mut self) {
         self.drain_timers();
+        self.drain_streams();
         if let Some(provider) = self.provider.take() {
             #[allow(deprecated)]
             gtk::style_context_remove_provider_for_display(&self.display, &provider);

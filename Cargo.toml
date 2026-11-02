@@ -12,8 +12,9 @@ anyhow = "1.0.104"
 async-channel = "2.5.0"
 gtk = { package = "gtk4", version = "0.11.5", features = ["v4_12"] }
 gtk4-layer-shell = "0.8.1"
-mlua = { version = "0.12.2", features = ["lua54", "vendored", "error-send"] }
+mlua = { version = "0.12.2", features = ["lua54", "vendored", "error-send", "serialize"] }
 serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0"
 toml = "1.1.8"
 toml_edit = "0.25.17"
 
