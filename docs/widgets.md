@@ -19,6 +19,8 @@ widget.
 - [Script](#script)
   - [External scripts](#external-scripts)
   - [API](#api)
+  - [JSON](#json)
+  - [Streaming output](#streaming-output)
 - [Reloading](#reloading)
 - [Validation](#validation)
 - [Limitations](#limitations)
@@ -91,9 +93,12 @@ the placement config uses.
 | `box` | vertical container |
 | `row` | horizontal container |
 | `grid` | equal-width rows and columns |
+| `scroll` | vertically scrollable container |
 | `label` | text |
 | `bar` | progress bar |
 | `slider` | horizontal slider |
+| `entry` | single-line text input |
+| `select` | dropdown selection |
 | `button` | clickable button |
 | `image` | picture from a file |
 | `spacer` | flexible empty space |
@@ -151,6 +156,30 @@ remain aligned. `gap` adds spacing between cells.
   <!-- ... -->
 </grid>
 ```
+
+### `scroll`
+
+A vertically scrollable container. Put its content in a single child container.
+Set `max-height` to let it grow with its content up to that height; content
+beyond it scrolls.
+
+```html
+<scroll class="transcript" max-height="340" follow="true">
+  <box gap="8">
+    {#each messages as message}
+      <label wrap="true">{message.content}</label>
+    {/each}
+  </box>
+</scroll>
+```
+
+| Attribute | Default | Meaning |
+| --- | --- | --- |
+| `max-height` | | maximum natural height in pixels |
+| `follow` | `false` | stay at the bottom while content grows |
+
+`follow` stops following when the user scrolls up, and resumes when the user
+returns to the bottom. Horizontal scrolling is disabled.
 
 ### `label`
 
@@ -218,6 +247,43 @@ slider trough    { min-height: 6px; background-image: none; background-color: rg
 slider highlight { min-height: 6px; background-image: none; background-color: #6366f1; }
 slider slider    { min-width: 14px; min-height: 14px; background-image: none; background-color: white; }
 ```
+
+### `entry`
+
+Single-line text input (`GtkEntry`).
+
+```html
+<entry text="{draft}" placeholder="Message" on:change="draft = event.value" on:submit="send(event.value)" />
+```
+
+| Attribute | Meaning |
+| --- | --- |
+| `text` | current text; may contain `{ expr }` |
+| `placeholder` | placeholder shown when empty |
+| `on:change` | Lua code run whenever the text changes |
+| `on:submit` | Lua code run when Enter is pressed |
+
+`event.value` is the current text as a string. Programmatic changes to `text`
+do not fire `on:change`. Keyboard focus is requested on demand while a visible
+`entry` exists.
+
+### `select`
+
+Dropdown selection (`GtkDropDown`).
+
+```html
+<select options="models" selected="model" on:change="model = event.value" />
+```
+
+| Attribute | Meaning |
+| --- | --- |
+| `options` | Lua expression returning an array of strings |
+| `selected` | Lua expression returning the selected string |
+| `on:change` | Lua code run when the selection changes |
+
+`event.value` is the selected string. If `selected` is missing from `options`,
+the first option is used. Changing `options` or `selected` updates the dropdown
+without firing `on:change`. A dropdown with no options is insensitive.
 
 ### `button`
 
@@ -384,13 +450,34 @@ file in the widget folder reloads the widget.
 | --- | --- |
 | `nitroget.every(ms, fn)` | run `fn` every `ms`; returns an id |
 | `nitroget.after(ms, fn)` | run `fn` once after `ms` |
-| `nitroget.clear(id)` | cancel a timer |
+| `nitroget.clear(id)` | cancel a timer or stream |
 | `nitroget.exec(cmd, fn)` | run a shell command off-thread; `fn(ok, output)` |
+| `nitroget.stream(cmd, stdin, on_line, on_done)` | run a shell command off-thread and stream its stdout |
+| `nitroget.json_encode(value)` | convert a Lua value to JSON text |
+| `nitroget.json_decode(text)` | convert JSON text to a Lua value |
 | `nitroget.run(cmd)` | run a shell command and ignore the output |
 | `nitroget.refresh()` | force an update (timers and handlers do this already) |
 | `nitroget.log(msg)` | print to the terminal |
 | `nitroget.quit()` | stop the daemon |
 | `nitroget.version` | engine version string |
+
+### JSON
+
+`nitroget.json_encode(value)` converts Lua values to JSON text.
+`nitroget.json_decode(text)` converts JSON text back to Lua values. Lua arrays
+with integer keys `1..n` become JSON arrays; string-keyed tables become objects.
+Invalid JSON raises a Lua error, so use `pcall` when decoding external input.
+
+### Streaming output
+
+`nitroget.stream(command, stdin, on_line, on_done)` runs a command through
+`sh -c`, writes `stdin` to it, and calls `on_line(line)` for each stdout line.
+`on_done(ok, error)` runs when the process exits; `error` contains stderr.
+Streams are stopped when the widget reloads, is parked, or calls
+`nitroget.clear(id)`.
+
+`on_line` and `on_done` run on the main thread, so they can update widget
+globals directly.
 
 ### Updating data
 
@@ -406,9 +493,9 @@ end
 nitroget.every(2000, read_cpu)
 ```
 
-After a timer, click, slider change or `exec` callback returns, Nitroget
-updates the widget. The script itself is **not** re-run; only the values that
-changed are written to GTK.
+After a timer, click, slider change, text change, selection change, stream
+update, or `exec` callback returns, Nitroget updates the widget. The script
+itself is **not** re-run; only the values that changed are written to GTK.
 
 ### Running commands
 
@@ -462,7 +549,10 @@ ignored attributes are reported with the file name. Modules loaded with
   position rather than moving widgets.
 - Every expression is re-evaluated on each update, though only changed
   properties are written to GTK.
-- Widgets on the `bottom` layer get pointer input but usually not keyboard
-  focus. Text input and overlays are not supported yet.
+- Widgets on the `bottom` layer get pointer input. Keyboard focus is requested
+  on demand while a visible `entry` exists.
+- Text input is single-line. Multi-line editors and general overlay/popover
+  elements are not supported.
+- `scroll` scrolls vertically only.
 - GNOME/Mutter does not implement layer-shell; it is not supported.
 - Widgets run with your user privileges and can execute commands.
