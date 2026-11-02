@@ -1,4 +1,4 @@
-<widget name="ollama" width="420" layer="overlay">
+<widget name="ollama" width="420">
   <box class="card">
     <row class="head">
       <label class="title">Ollama</label>
