@@ -83,6 +83,8 @@
   .message {
     padding: 8px 10px;
     border-radius: 12px;
+    margin-top: 6px;
+    margin-bottom: 6px;
   }
 
   .message label {
