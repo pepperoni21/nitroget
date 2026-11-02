@@ -32,7 +32,6 @@ local function refresh()
 
     if not ok then
       ready = false
-      busy = false
       status = "Ollama is not running"
       problem = ""
       return
@@ -111,8 +110,12 @@ function send(text)
       return
     end
 
-    if type(chunk.message) == "table" and type(chunk.message.content) == "string" then
-      messages[assistant].content = messages[assistant].content .. chunk.message.content
+    local assistant_message = messages[assistant]
+    if assistant_message
+      and type(chunk.message) == "table"
+      and type(chunk.message.content) == "string"
+    then
+      assistant_message.content = assistant_message.content .. chunk.message.content
     end
   end
 
@@ -133,15 +136,15 @@ function send(text)
     if message ~= "" and problem == "" then
       problem = message
     end
+
+    remove_empty(assistant)
   end
 
-  local id, failure = api.chat(model, request, line, done)
-  if not id then
+  local started = api.chat(model, request, line, done)
+  if not started then
     busy = false
     remove_empty(assistant)
-    if failure and failure ~= "" then
-      problem = failure
-    elseif problem == "" then
+    if problem == "" then
       problem = "request failed"
     end
   end

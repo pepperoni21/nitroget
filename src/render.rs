@@ -289,14 +289,15 @@ impl RElement {
                 } else {
                     Some(values[index.unwrap_or(0)].clone())
                 };
+                let target = if values.is_empty() {
+                    gtk::INVALID_LIST_POSITION
+                } else {
+                    index.unwrap_or(0) as u32
+                };
 
-                if options_changed || active != *last_selected {
+                if options_changed || active != *last_selected || dropdown.selected() != target {
                     suppress.set(true);
-                    if values.is_empty() {
-                        dropdown.set_selected(gtk::INVALID_LIST_POSITION);
-                    } else {
-                        dropdown.set_selected(index.unwrap_or(0) as u32);
-                    }
+                    dropdown.set_selected(target);
                     suppress.set(false);
                     *last_selected = active;
                 }
