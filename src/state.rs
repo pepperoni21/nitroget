@@ -48,6 +48,11 @@ pub enum Msg {
         code: String,
         value: f64,
     },
+    Text {
+        key: WidgetKey,
+        code: String,
+        value: String,
+    },
     /// Forced re-render from `nitroget.refresh`.
     Render {
         key: WidgetKey,
@@ -65,6 +70,21 @@ pub enum Msg {
     ClearTimer {
         key: WidgetKey,
         id: u64,
+    },
+    ClearStream {
+        key: WidgetKey,
+        id: u64,
+    },
+    StreamLine {
+        key: WidgetKey,
+        id: u64,
+        line: String,
+    },
+    StreamDone {
+        key: WidgetKey,
+        id: u64,
+        ok: bool,
+        error: String,
     },
     ExecDone {
         key: WidgetKey,
@@ -140,16 +160,23 @@ impl AppState {
             Msg::Sync => self.sync(),
             Msg::Click { key, code } => self.run(&key, &code, None),
             Msg::Change { key, code, value } => self.run(&key, &code, Some(value)),
+            Msg::Text { key, code, value } => self.run_text(&key, &code, &value),
             Msg::Render { key } => self.render(&key),
             Msg::Timer { key, id } => self.fire_timer(&key, id),
             Msg::RegisterTimer { key, id, ms, once } => self.register_timer(&key, id, ms, once),
             Msg::ClearTimer { key, id } => self.clear_timer(&key, id),
+            Msg::ClearStream { key, id } => self.clear_stream(&key, id),
+            Msg::StreamLine { key, id, line } => self.stream_line(&key, id, &line),
+            Msg::StreamDone { key, id, ok, error } => self.stream_done(&key, id, ok, &error),
             Msg::ExecDone { key, id, ok, text } => self.exec_done(&key, id, ok, &text),
             Msg::Placement(message) => self.placement(message),
             Msg::Quit => {
                 // Drop the socket guard while the process still has a chance
                 // to clean up; GLib does not drop local futures on shutdown.
                 self.socket.take();
+                for running in self.widgets.values_mut() {
+                    running.instance.drain_streams();
+                }
                 self.app.quit();
             }
         }
@@ -173,6 +200,36 @@ impl AppState {
         };
         running.instance.run_code(code, event);
         running.instance.render_now();
+    }
+
+    fn run_text(&mut self, key: &WidgetKey, code: &str, value: &str) {
+        let Some(running) = self.active(key) else {
+            return;
+        };
+        running.instance.run_text(code, value);
+        running.instance.render_now();
+    }
+
+    fn stream_line(&mut self, key: &WidgetKey, id: u64, line: &str) {
+        let Some(running) = self.active(key) else {
+            return;
+        };
+        running.instance.fire_stream_line(id, line);
+        running.instance.render_now();
+    }
+
+    fn stream_done(&mut self, key: &WidgetKey, id: u64, ok: bool, error: &str) {
+        let Some(running) = self.active(key) else {
+            return;
+        };
+        running.instance.finish_stream(id, ok, error);
+        running.instance.render_now();
+    }
+
+    fn clear_stream(&mut self, key: &WidgetKey, id: u64) {
+        if let Some(running) = self.active(key) {
+            running.instance.cancel_stream(id);
+        }
     }
 
     /// Returns the widget only while it is on screen. Stale messages queued

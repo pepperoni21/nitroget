@@ -38,7 +38,9 @@ impl Instance {
     /// is removed or disabled; the surface is reused if it comes back.
     pub fn park(&mut self) {
         self.drain_timers();
+        self.drain_streams();
         self.tree = None;
+        self.sync_keyboard_mode();
         self.textures.clear();
         self.window.set_child(None::<&gtk::Widget>);
         self.window.add_css_class("nitroget-parked");
@@ -70,7 +72,9 @@ impl Instance {
 
     pub(super) fn show_error(&mut self, message: &str) {
         self.drain_timers();
+        self.drain_streams();
         self.tree = None;
+        self.sync_keyboard_mode();
 
         let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
         root.add_css_class("nitroget-error");

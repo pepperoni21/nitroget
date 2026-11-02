@@ -1,0 +1,139 @@
+<widget name="ollama" width="420">
+  <box class="card">
+    <row class="head">
+      <label class="title">Ollama</label>
+      <spacer />
+      {#if ready and #models > 0}
+        <select class="models" options="models" selected="model" on:change="choose_model(event.value)" />
+      {/if}
+    </row>
+
+    {#if status ~= ""}
+      <label class="status" wrap="true">{status}</label>
+    {/if}
+
+    {#if problem ~= ""}
+      <label class="error" wrap="true">{problem}</label>
+    {/if}
+
+    {#if #messages > 0}
+      <scroll class="transcript" max-height="340" follow="true">
+        <box class="messages" gap="8">
+          {#each messages as message}
+            <box class="message {message.role}">
+              <label wrap="true">{message.content}</label>
+            </box>
+          {/each}
+        </box>
+      </scroll>
+    {/if}
+
+    {#if ready and #models > 0}
+      <row class="compose" gap="8">
+        <entry class="prompt" text="{draft}" placeholder="Message" on:change="update_draft(event.value)" on:submit="send(event.value)" />
+        <button class="send" text="{busy and '...' or 'Send'}" on:click="send()" />
+      </row>
+    {/if}
+  </box>
+</widget>
+
+<style>
+  .card {
+    background-color: rgba(18, 18, 24, 0.9);
+    border-radius: 18px;
+    padding: 14px;
+  }
+
+  .head {
+    margin-bottom: 8px;
+  }
+
+  .title {
+    font-size: 15px;
+    font-weight: 800;
+    color: #f4f4f5;
+  }
+
+  .models {
+    min-width: 180px;
+  }
+
+  .status {
+    font-size: 11px;
+    color: #fbbf24;
+    margin-bottom: 6px;
+  }
+
+  .error {
+    font-size: 11px;
+    color: #f87171;
+    margin-bottom: 6px;
+  }
+
+  .transcript {
+    background-color: rgba(0, 0, 0, 0.22);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+  }
+
+  .messages {
+    padding: 10px;
+  }
+
+  .message {
+    padding: 8px 10px;
+    border-radius: 12px;
+    margin-top: 6px;
+    margin-bottom: 6px;
+  }
+
+  .message label {
+    font-size: 13px;
+    color: #f4f4f5;
+  }
+
+  .message.user {
+    background-color: rgba(59, 130, 246, 0.32);
+    margin-left: 54px;
+  }
+
+  .message.assistant {
+    background-color: rgba(255, 255, 255, 0.08);
+    margin-right: 54px;
+  }
+
+  .compose {
+    margin-top: 10px;
+  }
+
+  .prompt {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: #f4f4f5;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 10px;
+    padding: 6px 10px;
+    min-height: 32px;
+    caret-color: #f4f4f5;
+  }
+
+  .prompt:focus {
+    border-color: rgba(59, 130, 246, 0.8);
+  }
+
+  .send {
+    background-image: none;
+    background-color: #3b82f6;
+    color: white;
+    border: none;
+    border-radius: 10px;
+    padding: 6px 14px;
+    min-height: 32px;
+    font-weight: 700;
+  }
+
+  .send:hover {
+    background-color: #2563eb;
+  }
+</style>
+
+<script src="main.lua"></script>
