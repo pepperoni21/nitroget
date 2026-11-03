@@ -1,18 +1,21 @@
 //! Lua runtime, timers and exec callbacks for one widget.
 
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
 use mlua::{Function, Lua, LuaSerdeExt, Table, Value};
 
-use crate::instance::{Instance, TimerEntry};
-use crate::state::{Msg, WidgetKey};
+use crate::component::Component;
+use crate::state::{Msg, TimerScope};
 
 const CALLBACKS: &str = "nitroget.callbacks";
 const STREAM_CALLBACKS: &str = "nitroget.stream_callbacks";
@@ -89,7 +92,7 @@ fn take_stream_done(lua: &Lua, id: u64) -> Option<Function> {
     entry.get::<Option<Function>>("done").ok()?
 }
 
-pub(super) fn remove_stream_callbacks(lua: &Lua, id: u64) -> mlua::Result<()> {
+fn remove_stream_callbacks(lua: &Lua, id: u64) -> mlua::Result<()> {
     stream_callback_table(lua)?.set(id as i64, Value::Nil)?;
     Ok(())
 }
@@ -98,7 +101,7 @@ fn spawn_stream(
     command: String,
     input: String,
     tx: async_channel::Sender<Msg>,
-    key: WidgetKey,
+    path: PathBuf,
     id: u64,
 ) -> std::io::Result<Arc<Mutex<Child>>> {
     let mut process = Command::new("sh");
@@ -137,7 +140,7 @@ fn spawn_stream(
                     break;
                 };
                 let _ = tx.send_blocking(Msg::StreamLine {
-                    key: key.clone(),
+                    path: path.clone(),
                     id,
                     line,
                 });
@@ -151,7 +154,7 @@ fn spawn_stream(
         let ok = status.is_some_and(|status| status.success());
 
         let _ = tx.send_blocking(Msg::StreamDone {
-            key,
+            path,
             id,
             ok,
             error: error.trim().to_string(),
@@ -179,19 +182,117 @@ fn configure_package(lua: &Lua, dirs: &[PathBuf]) -> mlua::Result<()> {
     Ok(())
 }
 
-impl Instance {
-    pub(super) fn register_lua(&mut self) -> Result<()> {
+pub struct TimerEntry {
+    pub source: gtk::glib::SourceId,
+    pub once: bool,
+    pub fired: Rc<Cell<bool>>,
+    pub scope: TimerScope,
+}
+
+impl TimerEntry {
+    fn cancel(self) {
+        if self.once && self.fired.get() {
+            return;
+        }
+        self.source.remove();
+    }
+}
+
+pub struct WidgetRuntime {
+    pub path: PathBuf,
+    pub lua: Lua,
+    pub timers: HashMap<u64, TimerEntry>,
+    pub streams: Rc<RefCell<HashMap<u64, Arc<Mutex<Child>>>>>,
+    pub exec_contexts: Rc<RefCell<HashMap<u64, Option<String>>>>,
+    pub stream_contexts: Rc<RefCell<HashMap<u64, Option<String>>>>,
+    pub current_output: Rc<RefCell<Option<String>>>,
+    pub outputs: Option<Table>,
+    pub tx: async_channel::Sender<Msg>,
+    pub error: Option<String>,
+    pub mtime: SystemTime,
+    pub paused: bool,
+}
+
+impl WidgetRuntime {
+    pub fn new(
+        comp: Component,
+        path: PathBuf,
+        mtime: SystemTime,
+        tx: async_channel::Sender<Msg>,
+    ) -> Result<Self> {
+        let mut runtime = Self {
+            path,
+            lua: Lua::new(),
+            timers: HashMap::new(),
+            streams: Rc::new(RefCell::new(HashMap::new())),
+            exec_contexts: Rc::new(RefCell::new(HashMap::new())),
+            stream_contexts: Rc::new(RefCell::new(HashMap::new())),
+            current_output: Rc::new(RefCell::new(None)),
+            outputs: None,
+            tx,
+            error: None,
+            mtime,
+            paused: false,
+        };
+
+        runtime.load(&comp)?;
+        Ok(runtime)
+    }
+
+    pub fn reload(&mut self, comp: &Component, mtime: SystemTime) -> Result<()> {
+        self.load(comp)?;
+        self.mtime = mtime;
+        Ok(())
+    }
+
+    pub fn pause(&mut self) {
+        self.drain_timers();
+        self.drain_streams();
+        self.exec_contexts.borrow_mut().clear();
+        self.stream_contexts.borrow_mut().clear();
+        self.lua = Lua::new();
+        self.outputs = None;
+        self.error = None;
+        *self.current_output.borrow_mut() = None;
+        self.paused = true;
+    }
+
+    fn load(&mut self, comp: &Component) -> Result<()> {
+        self.drain_timers();
+        self.drain_streams();
+        self.exec_contexts.borrow_mut().clear();
+        self.stream_contexts.borrow_mut().clear();
+        self.lua = Lua::new();
+        self.outputs = None;
+        self.error = None;
+        *self.current_output.borrow_mut() = None;
+        self.paused = false;
+
+        self.register_lua(&comp.lua_dirs)?;
+
+        if let Err(e) = self.lua.load(&comp.script).set_name("script").exec() {
+            self.error = Some(format!("script error in {}: {e}", comp.path.display()));
+            self.drain_streams();
+        }
+
+        Ok(())
+    }
+
+    fn register_lua(&mut self, dirs: &[PathBuf]) -> Result<()> {
         let lua = &self.lua;
-        configure_package(lua, &self.comp.lua_dirs)?;
+        configure_package(lua, dirs)?;
         let nt = lua.create_table()?;
+        let outputs = lua.create_table()?;
+        nt.set("outputs", outputs.clone())?;
+        self.outputs = Some(outputs);
 
         {
             let tx = self.tx.clone();
-            let key = self.key.clone();
+            let path = self.path.clone();
             nt.set(
                 "refresh",
                 lua.create_function(move |_, ()| {
-                    let _ = tx.try_send(Msg::Render { key: key.clone() });
+                    let _ = tx.try_send(Msg::Render { path: path.clone() });
                     Ok(())
                 })?,
             )?;
@@ -199,17 +300,18 @@ impl Instance {
 
         {
             let tx = self.tx.clone();
-            let key = self.key.clone();
+            let path = self.path.clone();
             nt.set(
                 "every",
                 lua.create_function(move |lua, (ms, func): (u64, Function)| {
                     let id = next_id();
                     store_callback(lua, id, func)?;
                     let _ = tx.try_send(Msg::RegisterTimer {
-                        key: key.clone(),
+                        path: path.clone(),
                         id,
                         ms: ms.max(16),
                         once: false,
+                        scope: TimerScope::Global,
                     });
                     Ok(id)
                 })?,
@@ -218,17 +320,18 @@ impl Instance {
 
         {
             let tx = self.tx.clone();
-            let key = self.key.clone();
+            let path = self.path.clone();
             nt.set(
                 "after",
                 lua.create_function(move |lua, (ms, func): (u64, Function)| {
                     let id = next_id();
                     store_callback(lua, id, func)?;
                     let _ = tx.try_send(Msg::RegisterTimer {
-                        key: key.clone(),
+                        path: path.clone(),
                         id,
                         ms: ms.max(1),
                         once: true,
+                        scope: TimerScope::Global,
                     });
                     Ok(id)
                 })?,
@@ -237,17 +340,57 @@ impl Instance {
 
         {
             let tx = self.tx.clone();
-            let key = self.key.clone();
+            let path = self.path.clone();
+            nt.set(
+                "every_output",
+                lua.create_function(move |lua, (ms, func): (u64, Function)| {
+                    let id = next_id();
+                    store_callback(lua, id, func)?;
+                    let _ = tx.try_send(Msg::RegisterTimer {
+                        path: path.clone(),
+                        id,
+                        ms: ms.max(16),
+                        once: false,
+                        scope: TimerScope::Output,
+                    });
+                    Ok(id)
+                })?,
+            )?;
+        }
+
+        {
+            let tx = self.tx.clone();
+            let path = self.path.clone();
+            nt.set(
+                "after_output",
+                lua.create_function(move |lua, (ms, func): (u64, Function)| {
+                    let id = next_id();
+                    store_callback(lua, id, func)?;
+                    let _ = tx.try_send(Msg::RegisterTimer {
+                        path: path.clone(),
+                        id,
+                        ms: ms.max(1),
+                        once: true,
+                        scope: TimerScope::Output,
+                    });
+                    Ok(id)
+                })?,
+            )?;
+        }
+
+        {
+            let tx = self.tx.clone();
+            let path = self.path.clone();
             nt.set(
                 "clear",
                 lua.create_function(move |lua, id: u64| {
                     remove_callback(lua, id)?;
                     let _ = tx.try_send(Msg::ClearTimer {
-                        key: key.clone(),
+                        path: path.clone(),
                         id,
                     });
                     let _ = tx.try_send(Msg::ClearStream {
-                        key: key.clone(),
+                        path: path.clone(),
                         id,
                     });
                     Ok(())
@@ -257,15 +400,19 @@ impl Instance {
 
         {
             let tx = self.tx.clone();
-            let key = self.key.clone();
+            let path = self.path.clone();
+            let exec_contexts = self.exec_contexts.clone();
+            let current_output = self.current_output.clone();
             nt.set(
                 "exec",
                 lua.create_function(move |lua, (cmd, func): (String, Function)| {
                     let id = next_id();
                     store_callback(lua, id, func)?;
+                    let context = current_output.borrow().clone();
+                    exec_contexts.borrow_mut().insert(id, context);
 
                     let tx = tx.clone();
-                    let key = key.clone();
+                    let path = path.clone();
                     thread::spawn(move || {
                         let output = std::process::Command::new("sh")
                             .arg("-c")
@@ -286,7 +433,7 @@ impl Instance {
                             Err(e) => (false, e.to_string()),
                         };
 
-                        let _ = tx.send_blocking(Msg::ExecDone { key, id, ok, text });
+                        let _ = tx.send_blocking(Msg::ExecDone { path, id, ok, text });
                     });
 
                     Ok(id)
@@ -296,14 +443,18 @@ impl Instance {
 
         {
             let tx = self.tx.clone();
-            let key = self.key.clone();
+            let path = self.path.clone();
             let streams = self.streams.clone();
+            let stream_contexts = self.stream_contexts.clone();
+            let current_output = self.current_output.clone();
             nt.set(
                 "stream",
                 lua.create_function(
                     move |lua, (cmd, input, line, done): (String, String, Function, Function)| {
                         let id = next_id();
-                        let shared = spawn_stream(cmd, input, tx.clone(), key.clone(), id)
+                        let context = current_output.borrow().clone();
+                        stream_contexts.borrow_mut().insert(id, context);
+                        let shared = spawn_stream(cmd, input, tx.clone(), path.clone(), id)
                             .map_err(mlua::Error::external)?;
                         streams.borrow_mut().insert(id, shared);
                         store_stream(lua, id, line, done)?;
@@ -373,6 +524,63 @@ impl Instance {
         Ok(())
     }
 
+    pub fn set_output_context(
+        &mut self,
+        connector: &str,
+        index: Option<i32>,
+        width: i32,
+        height: i32,
+    ) -> mlua::Result<()> {
+        let Some(outputs) = &self.outputs else {
+            return Ok(());
+        };
+
+        let key = if connector.is_empty() {
+            format!("#{}", index.unwrap_or(-1))
+        } else {
+            connector.to_string()
+        };
+
+        let table = match outputs.get::<Option<Table>>(key.as_str())? {
+            Some(table) => table,
+            None => {
+                let table = self.lua.create_table()?;
+                outputs.set(key.as_str(), table.clone())?;
+                table
+            }
+        };
+
+        table.set("connector", connector)?;
+        table.set("index", index)?;
+        table.set("width", width)?;
+        table.set("height", height)?;
+        self.lua.globals().set("output", table)?;
+        *self.current_output.borrow_mut() = Some(key);
+
+        Ok(())
+    }
+
+    pub fn clear_output_context(&mut self) -> mlua::Result<()> {
+        self.lua.globals().set("output", Value::Nil)?;
+        *self.current_output.borrow_mut() = None;
+        Ok(())
+    }
+
+    fn activate_output(&mut self, key: &str) -> mlua::Result<()> {
+        let Some(outputs) = &self.outputs else {
+            return Ok(());
+        };
+
+        if let Some(table) = outputs.get::<Option<Table>>(key)? {
+            self.lua.globals().set("output", table)?;
+            *self.current_output.borrow_mut() = Some(key.to_string());
+        } else {
+            self.clear_output_context()?;
+        }
+
+        Ok(())
+    }
+
     pub fn run_code(&mut self, code: &str, event: Option<f64>) {
         if let Some(value) = event
             && let Ok(event) = self.lua.create_table()
@@ -397,26 +605,32 @@ impl Instance {
         }
     }
 
-    pub fn register_timer(&mut self, id: u64, ms: u64, once: bool) {
+    pub fn register_timer(&mut self, id: u64, ms: u64, once: bool, scope: TimerScope) {
+        if self.error.is_some() {
+            return;
+        }
         if let Some(previous) = self.timers.remove(&id) {
             previous.cancel();
         }
 
         let tx = self.tx.clone();
-        let key = self.key.clone();
+        let path = self.path.clone();
         let millis = ms.max(1);
-        let fired = std::rc::Rc::new(std::cell::Cell::new(false));
+        let fired = Rc::new(Cell::new(false));
 
         let source = if once {
             let fired = fired.clone();
             gtk::glib::timeout_add_local_once(Duration::from_millis(millis), move || {
                 fired.set(true);
-                let _ = tx.try_send(Msg::Timer { key, id });
+                let _ = tx.try_send(Msg::Timer {
+                    path: path.clone(),
+                    id,
+                });
             })
         } else {
             gtk::glib::timeout_add_local(Duration::from_millis(millis), move || {
                 let _ = tx.try_send(Msg::Timer {
-                    key: key.clone(),
+                    path: path.clone(),
                     id,
                 });
                 gtk::glib::ControlFlow::Continue
@@ -429,8 +643,13 @@ impl Instance {
                 source,
                 once,
                 fired,
+                scope,
             },
         );
+    }
+
+    pub fn timer_scope(&self, id: u64) -> Option<TimerScope> {
+        self.timers.get(&id).map(|entry| entry.scope)
     }
 
     pub fn clear_timer(&mut self, id: u64) {
@@ -451,8 +670,10 @@ impl Instance {
             .map(|entry| entry.once)
             .unwrap_or(false);
 
+        let output: Value = self.lua.globals().get("output").unwrap_or(Value::Nil);
+
         if let Some(func) = get_callback(&self.lua, id)
-            && let Err(e) = func.call::<()>(())
+            && let Err(e) = func.call::<()>(output)
         {
             eprintln!("nitroget: timer error: {e}");
         }
@@ -460,35 +681,96 @@ impl Instance {
         once
     }
 
-    pub fn exec_done(&mut self, id: u64, ok: bool, text: &str) {
-        if let Some(func) = take_callback(&self.lua, id)
-            && let Err(e) = func.call::<()>((ok, text.to_string()))
-        {
+    pub fn exec_done(&mut self, id: u64, ok: bool, text: &str) -> bool {
+        let context = self.exec_contexts.borrow_mut().remove(&id).flatten();
+        let Some(func) = take_callback(&self.lua, id) else {
+            return false;
+        };
+
+        if let Some(key) = context {
+            let _ = self.activate_output(&key);
+        } else {
+            let _ = self.clear_output_context();
+        }
+
+        if let Err(e) = func.call::<()>((ok, text.to_string())) {
             eprintln!("nitroget: exec callback error: {e}");
         }
+
+        true
     }
 
-    pub fn fire_stream_line(&mut self, id: u64, line: &str) {
-        if let Some(func) = get_stream_line(&self.lua, id)
-            && let Err(e) = func.call::<()>(line.to_string())
-        {
+    pub fn fire_stream_line(&mut self, id: u64, line: &str) -> bool {
+        let Some(func) = get_stream_line(&self.lua, id) else {
+            return false;
+        };
+        let context = self.stream_contexts.borrow().get(&id).cloned().flatten();
+
+        if let Some(key) = context {
+            let _ = self.activate_output(&key);
+        } else {
+            let _ = self.clear_output_context();
+        }
+
+        if let Err(e) = func.call::<()>(line.to_string()) {
             eprintln!("nitroget: stream error: {e}");
         }
+
+        true
     }
 
-    pub fn finish_stream(&mut self, id: u64, ok: bool, error: &str) {
+    pub fn finish_stream(&mut self, id: u64, ok: bool, error: &str) -> bool {
         self.streams.borrow_mut().remove(&id);
-        if let Some(func) = take_stream_done(&self.lua, id)
-            && let Err(e) = func.call::<()>((ok, error.to_string()))
-        {
+        let context = self.stream_contexts.borrow_mut().remove(&id).flatten();
+        let Some(func) = take_stream_done(&self.lua, id) else {
+            return false;
+        };
+
+        if let Some(key) = context {
+            let _ = self.activate_output(&key);
+        } else {
+            let _ = self.clear_output_context();
+        }
+
+        if let Err(e) = func.call::<()>((ok, error.to_string())) {
             eprintln!("nitroget: stream callback error: {e}");
         }
+
+        true
+    }
+
+    pub fn clear_stream(&mut self, id: u64) {
+        if let Some(child) = self.streams.borrow_mut().remove(&id)
+            && let Ok(mut child) = child.lock()
+        {
+            let _ = child.kill();
+        }
+        self.stream_contexts.borrow_mut().remove(&id);
+        if let Err(e) = remove_stream_callbacks(&self.lua, id) {
+            eprintln!("nitroget: cannot clear stream {id}: {e}");
+        }
+    }
+
+    pub fn drain_timers(&mut self) {
+        for (_, entry) in self.timers.drain() {
+            entry.cancel();
+        }
+    }
+
+    pub fn drain_streams(&mut self) {
+        for (_, child) in self.streams.borrow_mut().drain() {
+            if let Ok(mut child) = child.lock() {
+                let _ = child.kill();
+            }
+        }
+        self.stream_contexts.borrow_mut().clear();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn require_loads_nested_modules() {
@@ -538,12 +820,12 @@ mod tests {
     #[test]
     fn stream_delivers_lines_and_completion() {
         let (tx, rx) = async_channel::unbounded();
-        let key = (PathBuf::from("stream.nitroget"), None);
+        let path = PathBuf::from("stream.nitroget");
         let _child = spawn_stream(
             "printf 'one\\ntwo\\n'".to_string(),
             String::new(),
             tx,
-            key,
+            path.clone(),
             7,
         )
         .unwrap();
@@ -551,11 +833,22 @@ mod tests {
         let mut lines = Vec::new();
         loop {
             match rx.recv_blocking().unwrap() {
-                Msg::StreamLine { id, line, .. } => {
+                Msg::StreamLine {
+                    path: line_path,
+                    id,
+                    line,
+                } => {
+                    assert_eq!(line_path, path);
                     assert_eq!(id, 7);
                     lines.push(line);
                 }
-                Msg::StreamDone { id, ok, error, .. } => {
+                Msg::StreamDone {
+                    path: done_path,
+                    id,
+                    ok,
+                    error,
+                } => {
+                    assert_eq!(done_path, path);
                     assert_eq!(id, 7);
                     assert!(ok, "{error}");
                     break;
@@ -570,8 +863,9 @@ mod tests {
     #[test]
     fn stream_forwards_stdin() {
         let (tx, rx) = async_channel::unbounded();
-        let key = (PathBuf::from("stream.nitroget"), None);
-        let _child = spawn_stream("cat".to_string(), "one\ntwo\n".to_string(), tx, key, 8).unwrap();
+        let path = PathBuf::from("stream.nitroget");
+        let _child =
+            spawn_stream("cat".to_string(), "one\ntwo\n".to_string(), tx, path, 8).unwrap();
 
         let mut lines = Vec::new();
         loop {
@@ -586,5 +880,36 @@ mod tests {
         }
 
         assert_eq!(lines, vec!["one", "two"]);
+    }
+
+    #[test]
+    fn output_context_is_shared_and_scoped() {
+        let comp = crate::component::parse(
+            "<widget name=\"w\"><label>x</label></widget><script>answer = 42</script>",
+            Path::new("w.nitroget"),
+        )
+        .unwrap();
+        let (tx, _rx) = async_channel::unbounded();
+        let mut runtime =
+            WidgetRuntime::new(comp, PathBuf::from("w.nitroget"), SystemTime::now(), tx).unwrap();
+
+        runtime
+            .set_output_context("eDP-1", Some(0), 1920, 1080)
+            .unwrap();
+        let connector: String = runtime.lua.load("return output.connector").eval().unwrap();
+        let width: i32 = runtime
+            .lua
+            .load("return nitroget.outputs['eDP-1'].width")
+            .eval()
+            .unwrap();
+        let shared: i32 = runtime.lua.load("return answer").eval().unwrap();
+
+        assert_eq!(connector, "eDP-1");
+        assert_eq!(width, 1920);
+        assert_eq!(shared, 42);
+
+        runtime.clear_output_context().unwrap();
+        let cleared: bool = runtime.lua.load("return output == nil").eval().unwrap();
+        assert!(cleared);
     }
 }

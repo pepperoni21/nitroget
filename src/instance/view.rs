@@ -2,7 +2,6 @@
 
 use anyhow::Result;
 use gtk::prelude::*;
-use mlua::Lua;
 
 use crate::instance::Instance;
 
@@ -37,8 +36,6 @@ impl Instance {
     /// Hides a widget without destroying its surface. Used when a widget file
     /// is removed or disabled; the surface is reused if it comes back.
     pub fn park(&mut self) {
-        self.drain_timers();
-        self.drain_streams();
         self.tree = None;
         self.sync_keyboard_mode();
         self.textures.clear();
@@ -57,8 +54,6 @@ impl Instance {
             let empty = gtk::cairo::Region::create();
             surface.set_input_region(Some(&empty));
         }
-
-        self.lua = Lua::new();
     }
 
     /// Frees the widget's content and Lua heap while keeping the surface mapped
@@ -70,9 +65,7 @@ impl Instance {
         self.comp.notes.clear();
     }
 
-    pub(super) fn show_error(&mut self, message: &str) {
-        self.drain_timers();
-        self.drain_streams();
+    pub(crate) fn show_error(&mut self, message: &str) {
         self.tree = None;
         self.sync_keyboard_mode();
 

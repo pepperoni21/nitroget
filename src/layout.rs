@@ -193,22 +193,30 @@ pub fn expand(
                 let mut copy = comp.clone();
                 copy.placement.output = None;
                 copy.placement.output_index = Some(monitor.index);
+                copy.placement.connector = Some(monitor.connector.clone());
                 apply_override(&mut copy, config, monitor);
                 resolve_panel(&mut copy, monitor);
                 out.push(copy);
             }
         } else {
             if let Some(index) = resolve_monitor(&comp.placement, monitors) {
+                let unresolved = comp
+                    .placement
+                    .output
+                    .as_deref()
+                    .is_none_or(|output| matches!(output, "" | "auto" | "focused"));
+
+                if matches!(comp.kind, ComponentKind::Panel(_))
+                    || !unresolved
+                    || comp.placement.output_index.is_some()
+                {
+                    comp.placement.connector = Some(monitors[index].connector.clone());
+                }
+
                 apply_override(&mut comp, config, &monitors[index]);
                 resolve_panel(&mut comp, &monitors[index]);
 
-                if matches!(comp.kind, ComponentKind::Panel(_))
-                    && comp
-                        .placement
-                        .output
-                        .as_deref()
-                        .is_none_or(|output| matches!(output, "" | "auto" | "focused"))
-                {
+                if matches!(comp.kind, ComponentKind::Panel(_)) && unresolved {
                     comp.placement.output = None;
                     comp.placement.output_index = Some(monitors[index].index);
                 }

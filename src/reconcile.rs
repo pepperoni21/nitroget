@@ -1,7 +1,9 @@
 //! Reconciliation between the desired widget set and the running windows.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::SystemTime;
 
 use async_channel::Sender;
@@ -9,7 +11,7 @@ use async_channel::Sender;
 use crate::component::{Component, Placement};
 use crate::config;
 use crate::discovery::{collect_paths, source_mtime};
-use crate::instance::Instance;
+use crate::instance::{Instance, WidgetRuntime};
 use crate::layout;
 use crate::state::{Msg, Running, WidgetKey, WidgetState};
 
@@ -83,6 +85,7 @@ pub fn can_update_in_place(old: &Placement, new: &Placement) -> bool {
 #[allow(clippy::too_many_arguments)]
 pub fn sync(
     widgets: &mut HashMap<WidgetKey, Running>,
+    runtimes: &mut HashMap<PathBuf, Rc<RefCell<WidgetRuntime>>>,
     retired: &mut Vec<Instance>,
     target: Option<&Path>,
     config_path: &Path,
@@ -146,6 +149,45 @@ pub fn sync(
     // overrides are applied.
     let components = layout::expand(components, &config, &monitors);
 
+    let mut ensured = HashSet::new();
+    for comp in &components {
+        let path = comp.path.clone();
+        if !ensured.insert(path.clone()) {
+            continue;
+        }
+
+        let mtime = source_mtime(&path);
+        let any_active = widgets.iter().any(|((key_path, _), running)| {
+            *key_path == path && running.state == WidgetState::Active
+        });
+
+        if let Some(runtime) = runtimes.get(&path).cloned() {
+            let needs_reload = {
+                let runtime = runtime.borrow();
+                runtime.mtime != mtime || runtime.paused || !any_active
+            };
+
+            if needs_reload {
+                if let Err(e) = runtime.borrow_mut().reload(comp, mtime) {
+                    eprintln!("nitroget: {}: {e:#}", path.display());
+                }
+                if let Some(error) = runtime.borrow().error.clone() {
+                    eprintln!("nitroget: {}: {error}", path.display());
+                }
+            }
+        } else {
+            match WidgetRuntime::new(comp.clone(), path.clone(), mtime, tx.clone()) {
+                Ok(runtime) => {
+                    if let Some(error) = runtime.error.clone() {
+                        eprintln!("nitroget: {}: {error}", path.display());
+                    }
+                    runtimes.insert(path, Rc::new(RefCell::new(runtime)));
+                }
+                Err(e) => eprintln!("nitroget: {}: {e:#}", path.display()),
+            }
+        }
+    }
+
     let desired: HashSet<WidgetKey> = components
         .iter()
         .map(|comp| (comp.path.clone(), comp.placement.output_index))
@@ -170,6 +212,10 @@ pub fn sync(
         let key = (path.clone(), comp.placement.output_index);
         let placement = comp.placement.clone();
         let mtime = source_mtime(&path);
+        let Some(runtime) = runtimes.get(&path).cloned() else {
+            eprintln!("nitroget: {}: no runtime", path.display());
+            continue;
+        };
 
         let decision = decide(
             widgets.get(&key).map(|running| Existing {
@@ -194,7 +240,7 @@ pub fn sync(
 
             Decision::Reload => {
                 if let Some(running) = widgets.get_mut(&key) {
-                    match running.instance.reload(comp) {
+                    match running.instance.reload_view(comp) {
                         Ok(()) => {
                             running.mtime = mtime;
                             running.placement = placement;
@@ -207,7 +253,14 @@ pub fn sync(
 
             Decision::Replace => {
                 let previous = widgets.remove(&key);
-                match Instance::create(comp, key.clone(), windowed, app, tx.clone()) {
+                match Instance::create(
+                    comp,
+                    runtime.clone(),
+                    key.clone(),
+                    windowed,
+                    app,
+                    tx.clone(),
+                ) {
                     Ok(instance) => {
                         if let Some(previous) = previous {
                             let mut instance_to_retire = previous.instance;
@@ -234,7 +287,7 @@ pub fn sync(
             }
 
             Decision::Create => {
-                match Instance::create(comp, key.clone(), windowed, app, tx.clone()) {
+                match Instance::create(comp, runtime, key.clone(), windowed, app, tx.clone()) {
                     Ok(instance) => {
                         widgets.insert(
                             key,
@@ -251,6 +304,23 @@ pub fn sync(
             }
         }
     }
+
+    let active_paths: HashSet<PathBuf> = widgets
+        .iter()
+        .filter(|(_, running)| running.state == WidgetState::Active)
+        .map(|((path, _), _)| path.clone())
+        .collect();
+
+    for (path, runtime) in runtimes.iter() {
+        if !active_paths.contains(path) {
+            let needs_pause = !runtime.borrow().paused;
+            if needs_pause {
+                runtime.borrow_mut().pause();
+            }
+        }
+    }
+
+    runtimes.retain(|path, _| widgets.keys().any(|(widget_path, _)| widget_path == path));
 }
 
 fn warn_duplicate_names(components: &[Component]) {

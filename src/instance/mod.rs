@@ -1,11 +1,9 @@
 mod runtime;
 mod view;
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::process::Child;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use gtk::prelude::*;
@@ -14,31 +12,14 @@ use mlua::Lua;
 use crate::component::{Component, ComponentKind, PanelEdge, Placement};
 use crate::state::{Msg, WidgetKey};
 
-pub struct TimerEntry {
-    pub source: gtk::glib::SourceId,
-    pub once: bool,
-    /// Set by the source itself just before a one-shot timer is destroyed.
-    /// Removing an already-fired `SourceId` panics, so `cancel` checks this.
-    pub fired: Rc<Cell<bool>>,
-}
-
-impl TimerEntry {
-    fn cancel(self) {
-        if self.once && self.fired.get() {
-            return;
-        }
-        self.source.remove();
-    }
-}
+pub use runtime::WidgetRuntime;
 
 pub struct Instance {
     pub key: WidgetKey,
     pub comp: Component,
     pub window: gtk::Window,
     pub lua: Lua,
-
-    pub timers: HashMap<u64, TimerEntry>,
-    pub streams: Rc<RefCell<HashMap<u64, Arc<Mutex<Child>>>>>,
+    pub runtime: Rc<RefCell<WidgetRuntime>>,
 
     /// Persistent render tree; rebuilt only when the component changes.
     pub tree: Option<crate::render::Tree>,
@@ -55,6 +36,7 @@ pub struct Instance {
 impl Instance {
     pub fn create(
         comp: Component,
+        runtime: Rc<RefCell<WidgetRuntime>>,
         key: WidgetKey,
         windowed: bool,
         app: &gtk::Application,
@@ -74,13 +56,13 @@ impl Instance {
         let window = new_window(&comp.name, app, use_layer_shell);
         apply_placement(&window, None, &comp.placement, &comp.kind, use_layer_shell);
 
+        let lua = runtime.borrow().lua.clone();
         let mut instance = Instance {
             key,
             comp,
             window,
-            lua: Lua::new(),
-            timers: HashMap::new(),
-            streams: Rc::new(RefCell::new(HashMap::new())),
+            lua,
+            runtime,
             tree: None,
             textures: HashMap::new(),
             display,
@@ -95,19 +77,15 @@ impl Instance {
     }
 
     fn init(&mut self) -> Result<()> {
-        self.register_lua()?;
+        self.apply_css()?;
 
-        let script = self.lua.load(&self.comp.script).set_name("script").exec();
-
-        if let Err(e) = script {
-            let _ = self.apply_css();
-            self.show_error(&format!("{e:#}"));
-            self.window.present();
-            return Ok(());
+        let error = self.runtime.borrow().error.clone();
+        if let Some(error) = error {
+            self.show_error(&error);
+        } else {
+            self.render_now();
         }
 
-        self.apply_css()?;
-        self.render_now();
         self.window.present();
 
         Ok(())
@@ -130,26 +108,7 @@ impl Instance {
         );
     }
 
-    /// Rebuilds the Lua runtime and content **in the existing window**.
-    ///
-    /// Destroying a layer surface and creating a new one trips a teardown bug
-    /// in some compositors (notably COSMIC with gtk4-layer-shell < 1.4), which
-    /// drops the client's Wayland connection. Reusing the surface keeps hot
-    /// reload and config changes safe — and avoids a visible flicker.
-    pub fn reload(&mut self, comp: Component) -> Result<()> {
-        // Compile before tearing anything down: a syntax error must leave the
-        // currently running widget intact.
-        {
-            let check = Lua::new();
-            check
-                .load(&comp.script)
-                .set_name("script")
-                .into_function()
-                .with_context(|| format!("script error in {}", comp.path.display()))?;
-        }
-
-        self.drain_timers();
-        self.drain_streams();
+    pub fn reload_view(&mut self, comp: Component) -> Result<()> {
         self.tree = None;
         self.textures.clear();
 
@@ -162,50 +121,32 @@ impl Instance {
             self.use_layer_shell,
         );
 
-        self.lua = Lua::new();
-
-        if let Err(e) = self.register_lua() {
-            let _ = self.apply_css();
-            self.show_error(&format!("{e:#}"));
-            return Err(e);
-        }
-
-        if let Err(e) = self.lua.load(&self.comp.script).set_name("script").exec() {
-            let message = format!("script error in {}: {e}", self.comp.path.display());
-            let _ = self.apply_css();
-            self.show_error(&message);
-            return Err(anyhow::anyhow!(message));
-        }
+        self.lua = self.runtime.borrow().lua.clone();
 
         self.apply_css()?;
+
+        let error = self.runtime.borrow().error.clone();
+        if let Some(error) = error {
+            self.show_error(&error);
+            return Ok(());
+        }
+
         self.unpark();
         self.render_now();
 
         Ok(())
     }
 
-    fn drain_timers(&mut self) {
-        for (_, entry) in self.timers.drain() {
-            entry.cancel();
-        }
-    }
+    pub fn set_output_context(&self) {
+        let connector = self.comp.placement.connector.clone().unwrap_or_default();
+        let index = self.comp.placement.output_index;
+        let width = self.window.width();
+        let height = self.window.height();
 
-    pub fn drain_streams(&mut self) {
-        for (_, child) in self.streams.borrow_mut().drain() {
-            if let Ok(mut child) = child.lock() {
-                let _ = child.kill();
-            }
-        }
-    }
-
-    pub fn cancel_stream(&mut self, id: u64) {
-        if let Some(child) = self.streams.borrow_mut().remove(&id)
-            && let Ok(mut child) = child.lock()
+        if let Ok(mut runtime) = self.runtime.try_borrow_mut()
+            && let Err(e) = runtime.set_output_context(&connector, index, width, height)
         {
-            let _ = child.kill();
-        }
-        if let Err(e) = runtime::remove_stream_callbacks(&self.lua, id) {
-            eprintln!("nitroget: cannot clear stream {id}: {e}");
+            eprintln!("nitroget: cannot set output context: {e}");
         }
     }
 
@@ -235,8 +176,6 @@ impl Instance {
 
 impl Drop for Instance {
     fn drop(&mut self) {
-        self.drain_timers();
-        self.drain_streams();
         if let Some(provider) = self.provider.take() {
             #[allow(deprecated)]
             gtk::style_context_remove_provider_for_display(&self.display, &provider);

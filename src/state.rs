@@ -1,18 +1,26 @@
 //! Single-owner application state and the message loop.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::SystemTime;
 
 use async_channel::Sender;
 use gtk::prelude::*;
 
 use crate::component::Placement as ComponentPlacement;
-use crate::instance::Instance;
+use crate::instance::{Instance, WidgetRuntime};
 use crate::placement::Placement;
 use crate::reconcile;
 
 pub type WidgetKey = (PathBuf, Option<i32>);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimerScope {
+    Global,
+    Output,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WidgetState {
@@ -25,6 +33,15 @@ pub struct Running {
     pub mtime: SystemTime,
     pub placement: ComponentPlacement,
     pub state: WidgetState,
+}
+
+struct ViewInfo {
+    key: WidgetKey,
+    runtime: Rc<RefCell<WidgetRuntime>>,
+    connector: String,
+    index: Option<i32>,
+    width: i32,
+    height: i32,
 }
 
 /// Where a running widget actually is, and how large GTK actually made it.
@@ -55,39 +72,40 @@ pub enum Msg {
     },
     /// Forced re-render from `nitroget.refresh`.
     Render {
-        key: WidgetKey,
+        path: PathBuf,
     },
     Timer {
-        key: WidgetKey,
+        path: PathBuf,
         id: u64,
     },
     RegisterTimer {
-        key: WidgetKey,
+        path: PathBuf,
         id: u64,
         ms: u64,
         once: bool,
+        scope: TimerScope,
     },
     ClearTimer {
-        key: WidgetKey,
+        path: PathBuf,
         id: u64,
     },
     ClearStream {
-        key: WidgetKey,
+        path: PathBuf,
         id: u64,
     },
     StreamLine {
-        key: WidgetKey,
+        path: PathBuf,
         id: u64,
         line: String,
     },
     StreamDone {
-        key: WidgetKey,
+        path: PathBuf,
         id: u64,
         ok: bool,
         error: String,
     },
     ExecDone {
-        key: WidgetKey,
+        path: PathBuf,
         id: u64,
         ok: bool,
         text: String,
@@ -125,6 +143,7 @@ pub struct AppState {
     pub app: gtk::Application,
     pub tx: Sender<Msg>,
     pub widgets: HashMap<WidgetKey, Running>,
+    pub runtimes: HashMap<PathBuf, Rc<RefCell<WidgetRuntime>>>,
     pub retired: Vec<Instance>,
     pub placement: Placement,
     /// Removes the control socket when the daemon shuts down cleanly.
@@ -149,6 +168,7 @@ impl AppState {
             app,
             tx,
             widgets: HashMap::new(),
+            runtimes: HashMap::new(),
             retired: Vec::new(),
             placement,
             socket,
@@ -161,21 +181,32 @@ impl AppState {
             Msg::Click { key, code } => self.run(&key, &code, None),
             Msg::Change { key, code, value } => self.run(&key, &code, Some(value)),
             Msg::Text { key, code, value } => self.run_text(&key, &code, &value),
-            Msg::Render { key } => self.render(&key),
-            Msg::Timer { key, id } => self.fire_timer(&key, id),
-            Msg::RegisterTimer { key, id, ms, once } => self.register_timer(&key, id, ms, once),
-            Msg::ClearTimer { key, id } => self.clear_timer(&key, id),
-            Msg::ClearStream { key, id } => self.clear_stream(&key, id),
-            Msg::StreamLine { key, id, line } => self.stream_line(&key, id, &line),
-            Msg::StreamDone { key, id, ok, error } => self.stream_done(&key, id, ok, &error),
-            Msg::ExecDone { key, id, ok, text } => self.exec_done(&key, id, ok, &text),
+            Msg::Render { path } => self.render_path(&path),
+            Msg::Timer { path, id } => self.fire_timer(&path, id),
+            Msg::RegisterTimer {
+                path,
+                id,
+                ms,
+                once,
+                scope,
+            } => self.register_timer(&path, id, ms, once, scope),
+            Msg::ClearTimer { path, id } => self.clear_timer(&path, id),
+            Msg::ClearStream { path, id } => self.clear_stream(&path, id),
+            Msg::StreamLine { path, id, line } => self.stream_line(&path, id, &line),
+            Msg::StreamDone {
+                path,
+                id,
+                ok,
+                error,
+            } => self.stream_done(&path, id, ok, &error),
+            Msg::ExecDone { path, id, ok, text } => self.exec_done(&path, id, ok, &text),
             Msg::Placement(message) => self.placement(message),
             Msg::Quit => {
                 // Drop the socket guard while the process still has a chance
                 // to clean up; GLib does not drop local futures on shutdown.
                 self.socket.take();
-                for running in self.widgets.values_mut() {
-                    running.instance.drain_streams();
+                for runtime in self.runtimes.values() {
+                    runtime.borrow_mut().drain_streams();
                 }
                 self.app.quit();
             }
@@ -185,6 +216,7 @@ impl AppState {
     pub fn sync(&mut self) {
         reconcile::sync(
             &mut self.widgets,
+            &mut self.runtimes,
             &mut self.retired,
             self.target.as_deref(),
             &self.config_path,
@@ -195,40 +227,62 @@ impl AppState {
     }
 
     fn run(&mut self, key: &WidgetKey, code: &str, event: Option<f64>) {
-        let Some(running) = self.active(key) else {
+        let Some(view) = self.view_context(key) else {
             return;
         };
-        running.instance.run_code(code, event);
-        running.instance.render_now();
+        if let Ok(mut runtime) = view.runtime.try_borrow_mut() {
+            let _ =
+                runtime.set_output_context(&view.connector, view.index, view.width, view.height);
+            runtime.run_code(code, event);
+        }
+        self.render_path(&key.0);
     }
 
     fn run_text(&mut self, key: &WidgetKey, code: &str, value: &str) {
-        let Some(running) = self.active(key) else {
+        let Some(view) = self.view_context(key) else {
             return;
         };
-        running.instance.run_text(code, value);
-        running.instance.render_now();
+        if let Ok(mut runtime) = view.runtime.try_borrow_mut() {
+            let _ =
+                runtime.set_output_context(&view.connector, view.index, view.width, view.height);
+            runtime.run_text(code, value);
+        }
+        self.render_path(&key.0);
     }
 
-    fn stream_line(&mut self, key: &WidgetKey, id: u64, line: &str) {
-        let Some(running) = self.active(key) else {
+    fn stream_line(&mut self, path: &Path, id: u64, line: &str) {
+        let Some(runtime) = self.runtimes.get(path).cloned() else {
             return;
         };
-        running.instance.fire_stream_line(id, line);
-        running.instance.render_now();
+        let fired = if let Ok(mut runtime) = runtime.try_borrow_mut() {
+            runtime.fire_stream_line(id, line)
+        } else {
+            false
+        };
+        if fired {
+            self.render_path(path);
+        }
     }
 
-    fn stream_done(&mut self, key: &WidgetKey, id: u64, ok: bool, error: &str) {
-        let Some(running) = self.active(key) else {
+    fn stream_done(&mut self, path: &Path, id: u64, ok: bool, error: &str) {
+        let Some(runtime) = self.runtimes.get(path).cloned() else {
             return;
         };
-        running.instance.finish_stream(id, ok, error);
-        running.instance.render_now();
+        let fired = if let Ok(mut runtime) = runtime.try_borrow_mut() {
+            runtime.finish_stream(id, ok, error)
+        } else {
+            false
+        };
+        if fired {
+            self.render_path(path);
+        }
     }
 
-    fn clear_stream(&mut self, key: &WidgetKey, id: u64) {
-        if let Some(running) = self.active(key) {
-            running.instance.cancel_stream(id);
+    fn clear_stream(&mut self, path: &Path, id: u64) {
+        if let Some(runtime) = self.runtimes.get(path)
+            && let Ok(mut runtime) = runtime.try_borrow_mut()
+        {
+            runtime.clear_stream(id);
         }
     }
 
@@ -241,41 +295,139 @@ impl AppState {
             .filter(|running| running.state == WidgetState::Active)
     }
 
-    fn render(&mut self, key: &WidgetKey) {
-        if let Some(running) = self.active(key) {
-            running.instance.render_now();
+    fn view_context(&self, key: &WidgetKey) -> Option<ViewInfo> {
+        let running = self
+            .widgets
+            .get(key)
+            .filter(|running| running.state == WidgetState::Active)?;
+        Some(ViewInfo {
+            key: key.clone(),
+            runtime: running.instance.runtime.clone(),
+            connector: running
+                .instance
+                .comp
+                .placement
+                .connector
+                .clone()
+                .unwrap_or_default(),
+            index: key.1,
+            width: running.instance.window.width(),
+            height: running.instance.window.height(),
+        })
+    }
+
+    fn view_contexts(&self, path: &Path) -> Vec<ViewInfo> {
+        self.widgets
+            .iter()
+            .filter(|(key, running)| key.0 == path && running.state == WidgetState::Active)
+            .map(|(key, running)| ViewInfo {
+                key: key.clone(),
+                runtime: running.instance.runtime.clone(),
+                connector: running
+                    .instance
+                    .comp
+                    .placement
+                    .connector
+                    .clone()
+                    .unwrap_or_default(),
+                index: key.1,
+                width: running.instance.window.width(),
+                height: running.instance.window.height(),
+            })
+            .collect()
+    }
+
+    fn render_path(&mut self, path: &Path) {
+        let keys: Vec<WidgetKey> = self
+            .widgets
+            .iter()
+            .filter(|(key, running)| key.0 == path && running.state == WidgetState::Active)
+            .map(|(key, _)| key.clone())
+            .collect();
+
+        for key in keys {
+            if let Some(running) = self.active(&key) {
+                running.instance.render_now();
+            }
         }
     }
 
-    fn fire_timer(&mut self, key: &WidgetKey, id: u64) {
-        let Some(running) = self.active(key) else {
+    fn fire_timer(&mut self, path: &Path, id: u64) {
+        let Some(runtime) = self.runtimes.get(path).cloned() else {
             return;
         };
-        let once = running.instance.fire_timer(id);
-        if once {
-            running.instance.clear_timer(id);
-        }
-        running.instance.render_now();
-    }
-
-    fn register_timer(&mut self, key: &WidgetKey, id: u64, ms: u64, once: bool) {
-        if let Some(running) = self.active(key) {
-            running.instance.register_timer(id, ms, once);
-        }
-    }
-
-    fn clear_timer(&mut self, key: &WidgetKey, id: u64) {
-        if let Some(running) = self.active(key) {
-            running.instance.clear_timer(id);
-        }
-    }
-
-    fn exec_done(&mut self, key: &WidgetKey, id: u64, ok: bool, text: &str) {
-        let Some(running) = self.active(key) else {
+        let Some(scope) = runtime.borrow().timer_scope(id) else {
             return;
         };
-        running.instance.exec_done(id, ok, text);
-        running.instance.render_now();
+
+        match scope {
+            TimerScope::Global => {
+                let once = {
+                    let Ok(mut runtime) = runtime.try_borrow_mut() else {
+                        return;
+                    };
+                    let _ = runtime.clear_output_context();
+                    runtime.fire_timer(id)
+                };
+                if once && let Ok(mut runtime) = runtime.try_borrow_mut() {
+                    runtime.clear_timer(id);
+                }
+                self.render_path(path);
+            }
+            TimerScope::Output => {
+                let contexts = self.view_contexts(path);
+                let mut once = false;
+
+                for view in contexts {
+                    if let Ok(mut runtime) = runtime.try_borrow_mut() {
+                        let _ = runtime.set_output_context(
+                            &view.connector,
+                            view.index,
+                            view.width,
+                            view.height,
+                        );
+                        once = runtime.fire_timer(id);
+                    }
+                    if let Some(running) = self.active(&view.key) {
+                        running.instance.render_now();
+                    }
+                }
+
+                if once && let Ok(mut runtime) = runtime.try_borrow_mut() {
+                    runtime.clear_timer(id);
+                }
+            }
+        }
+    }
+
+    fn register_timer(&mut self, path: &Path, id: u64, ms: u64, once: bool, scope: TimerScope) {
+        if let Some(runtime) = self.runtimes.get(path)
+            && let Ok(mut runtime) = runtime.try_borrow_mut()
+        {
+            runtime.register_timer(id, ms, once, scope);
+        }
+    }
+
+    fn clear_timer(&mut self, path: &Path, id: u64) {
+        if let Some(runtime) = self.runtimes.get(path)
+            && let Ok(mut runtime) = runtime.try_borrow_mut()
+        {
+            runtime.clear_timer(id);
+        }
+    }
+
+    fn exec_done(&mut self, path: &Path, id: u64, ok: bool, text: &str) {
+        let Some(runtime) = self.runtimes.get(path).cloned() else {
+            return;
+        };
+        let fired = if let Ok(mut runtime) = runtime.try_borrow_mut() {
+            runtime.exec_done(id, ok, text)
+        } else {
+            false
+        };
+        if fired {
+            self.render_path(path);
+        }
     }
 
     fn placement(&mut self, message: PlacementMsg) {
