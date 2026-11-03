@@ -21,6 +21,8 @@ widget. A `.nitroget` file can also define an edge-attached panel with
 - [Script](#script)
   - [External scripts](#external-scripts)
   - [API](#api)
+  - [Shared and per-output state](#shared-and-per-output-state)
+  - [Per-output timers](#per-output-timers)
   - [JSON](#json)
   - [Streaming output](#streaming-output)
 - [Reloading](#reloading)
@@ -124,8 +126,8 @@ A panel reserves an exclusive zone automatically. The zone is
 edge strip only; a panel cannot reserve an arbitrary rectangle in the middle of
 an output.
 
-`output = "all"` creates one panel per monitor. Each copy has its own Lua state,
-timers and streams.
+`output = "all"` creates one panel per monitor. All copies share one Lua state
+and timer set; use `output` or `nitroget.outputs` for per-monitor state.
 
 ```toml
 [widgets.bar]
@@ -458,8 +460,9 @@ properties such as `display: flex` do not. Layout comes from `box`/`row`.
 
 ## Script
 
-The script runs once when the widget loads, in Lua 5.4. Anything it assigns to a
-global is visible to the template:
+The script runs once for the widget path when the surface loads, in Lua 5.4.
+All monitor copies created by `output = "all"` share that Lua state. Anything it
+assigns to a global is shared by every copy and visible to the template:
 
 ```lua
 time = os.date("%H:%M")
@@ -480,7 +483,8 @@ Keep a long script in its own file:
 ```
 
 `src` is resolved relative to the `.nitroget` file and must stay inside the
-widget folder. The file runs once when the widget loads, like an inline script.
+widget folder. The file runs once for the widget path when the surface loads,
+like an inline script.
 
 Scripts can use `require` for other Lua files:
 
@@ -498,10 +502,12 @@ file in the widget folder reloads the widget.
 
 | Call | Description |
 | --- | --- |
-| `nitroget.every(ms, fn)` | run `fn` every `ms`; returns an id |
-| `nitroget.after(ms, fn)` | run `fn` once after `ms` |
+| `nitroget.every(ms, fn)` | run `fn` every `ms`, shared by the whole widget; returns an id |
+| `nitroget.after(ms, fn)` | run `fn` once after `ms` for the whole widget |
+| `nitroget.every_output(ms, fn)` | run `fn(output)` every `ms` for each active output |
+| `nitroget.after_output(ms, fn)` | run `fn(output)` once after `ms` for each active output |
 | `nitroget.clear(id)` | cancel a timer or stream |
-| `nitroget.exec(cmd, fn)` | run a shell command off-thread; `fn(ok, output)` |
+| `nitroget.exec(cmd, fn)` | run a shell command off-thread; `fn(ok, text)` |
 | `nitroget.stream(cmd, stdin, on_line, on_done)` | run a shell command off-thread and stream its stdout |
 | `nitroget.json_encode(value)` | convert a Lua value to JSON text |
 | `nitroget.json_decode(text)` | convert JSON text to a Lua value |
@@ -510,6 +516,64 @@ file in the widget folder reloads the widget.
 | `nitroget.log(msg)` | print to the terminal |
 | `nitroget.quit()` | stop the daemon |
 | `nitroget.version` | engine version string |
+
+### Shared and per-output state
+
+Normal Lua globals are shared by every monitor copy of a widget. Use them for
+values that should be the same everywhere:
+
+```lua
+clock = os.date("%H:%M")
+
+nitroget.every(1000, function()
+  clock = os.date("%H:%M")
+end)
+```
+
+Each active output has its own table in `nitroget.outputs`, keyed by connector.
+The same table is available as the global `output` while that output is
+rendering or handling an event:
+
+```lua
+nitroget.every_output(2000, function(output)
+  output.cpu = read_cpu()
+end)
+```
+
+```html
+<label>{clock}</label>
+<label>{output.connector}: {output.cpu}%</label>
+```
+
+Each output table contains `connector`, `index`, `width` and `height`, plus any
+fields the script assigns. Globals are shared; `output.<field>` belongs to one
+monitor. The global `output` name is reserved by the engine; use
+`nitroget.outputs` to iterate every active output.
+
+For an output chosen by the compositor, `connector` can be empty and `index` can
+be nil. When no connector is resolved, the table is keyed by a synthetic index.
+
+### Per-output timers
+
+`nitroget.every` and `nitroget.after` create one timer for the whole widget.
+The callback runs once, with `output` set to nil.
+
+`nitroget.every_output` and `nitroget.after_output` invoke the callback for every
+active output on the same interval. The callback receives that output table, and
+the global `output` refers to the same table.
+
+```lua
+nitroget.every_output(1000, function(output)
+  output.time = os.date("%H:%M")
+end)
+```
+
+Per-output timers are useful when each monitor needs its own command or value.
+Global timers are cheaper when every monitor shows the same data.
+
+`exec` and `stream` callbacks keep the output context in which they were
+started. A command started inside an `every_output` callback can therefore use
+`output` safely in its completion callback.
 
 ### JSON
 
@@ -544,15 +608,16 @@ nitroget.every(2000, read_cpu)
 ```
 
 After a timer, click, slider change, text change, selection change, stream
-update, or `exec` callback returns, Nitroget updates the widget. The script
-itself is **not** re-run; only the values that changed are written to GTK.
+update, or `exec` callback returns, Nitroget updates the affected views. The
+script itself is **not** re-run; only the values that changed are written to
+GTK.
 
 ### Running commands
 
 ```lua
 -- asynchronous, with a result
-nitroget.exec("playerctl metadata --format '{{title}}'", function(ok, output)
-  if ok then track = output end
+nitroget.exec("playerctl metadata --format '{{title}}'", function(ok, text)
+  if ok then track = text end
 end)
 
 -- fire and forget
@@ -575,11 +640,16 @@ then start with the new folder.
 ## Reloading
 
 Saving a widget file or any `.lua` file in its folder reloads it after about
-400 ms: the Lua script runs again, timers restart and Lua state is reset.
+400 ms: the Lua script runs again once for the widget path, timers restart,
+shared Lua state is reset, and every monitor copy rebuilds.
 
 Changing the anchor/offset in `config.toml` or `nitroget placement` moves the
 window without reloading the script, so widget state survives a move. Changing
-monitor, layer or size builds a new surface and reloads the widget.
+monitor, layer or size builds a new surface and re-renders it; shared Lua state
+is preserved.
+
+When every copy is parked, timers and streams are drained. The script runs again
+when a copy returns.
 
 ## Validation
 
@@ -606,5 +676,7 @@ ignored attributes are reported with the file name. Modules loaded with
 - `scroll` scrolls vertically only.
 - Panels are edge-attached. Exclusive zones cannot reserve arbitrary rectangles
   in the middle of an output.
+- All monitor copies of a widget share one Lua state. A runtime error or global
+  mutation affects every copy.
 - GNOME/Mutter does not implement layer-shell; it is not supported.
 - Widgets run with your user privileges and can execute commands.

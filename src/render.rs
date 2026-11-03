@@ -1096,6 +1096,14 @@ fn apply_common(
 
 impl Instance {
     pub fn render_now(&mut self) {
+        let error = self.runtime.borrow().error.clone();
+        if let Some(error) = error {
+            self.show_error(&error);
+            return;
+        }
+
+        self.set_output_context();
+
         if let Some(mut tree) = self.tree.take() {
             if let Err(e) = tree.update(self) {
                 eprintln!(

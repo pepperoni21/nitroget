@@ -47,6 +47,8 @@ pub struct Placement {
     /// Concrete monitor index, set internally when `output = "all"` expands a
     /// widget into one copy per monitor.
     pub output_index: Option<i32>,
+    /// Connector name resolved during layout expansion.
+    pub connector: Option<String>,
 }
 
 impl Default for Placement {
@@ -59,6 +61,7 @@ impl Default for Placement {
             layer: "bottom".into(),
             output: None,
             output_index: None,
+            connector: None,
         }
     }
 }
