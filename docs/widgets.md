@@ -169,6 +169,7 @@ These work on every element:
 | `hexpand`, `vexpand` | expand in one direction |
 | `halign`, `valign` | `start`, `center`, `end`, `fill` |
 | `tooltip` | tooltip text; may contain `{ expr }` |
+| `cursor` | cursor name over the element, such as `pointer` or `text` |
 | `visible` | show/hide; a Lua expression such as `{count > 0}` |
 | `on:click` | Lua code to run when clicked |
 
@@ -179,9 +180,6 @@ statement directly:
 <button on:click="increment()">+1</button>
 <button on:click="count = count + 1">+1</button>
 ```
-
-On a `button` the handler runs on click. On other elements it runs on pointer
-press.
 
 ### `box` and `row`
 

@@ -1067,6 +1067,11 @@ fn apply_common(
         common.visible = visible;
     }
 
+    if let Some(raw) = element.attr("cursor") {
+        let name = raw.trim();
+        widget.set_cursor_from_name((!name.is_empty()).then_some(name));
+    }
+
     if let Some(code) = element.attr("on:click").map(str::to_string) {
         let tx = inst.tx.clone();
         let key = inst.key.clone();
