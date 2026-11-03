@@ -12,7 +12,7 @@ use mlua::Lua;
 use crate::component::{Component, ComponentKind, PanelEdge, Placement};
 use crate::state::{Msg, WidgetKey};
 
-pub use runtime::WidgetRuntime;
+pub use runtime::{MENU_ANCHOR, MenuAnchor, WidgetRuntime};
 
 pub struct Instance {
     pub key: WidgetKey,
@@ -30,6 +30,7 @@ pub struct Instance {
     pub provider: Option<gtk::CssProvider>,
     pub use_layer_shell: bool,
     pub keyboard_active: bool,
+    pub each_stack: Vec<i64>,
     pub tx: async_channel::Sender<Msg>,
 }
 
@@ -69,6 +70,7 @@ impl Instance {
             provider: None,
             use_layer_shell,
             keyboard_active: false,
+            each_stack: Vec::new(),
             tx,
         };
 

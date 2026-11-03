@@ -181,6 +181,9 @@ statement directly:
 <button on:click="count = count + 1">+1</button>
 ```
 
+Inside `{#each}`, `event.index` is the zero-based row index and `event.button`
+is the pointer button.
+
 ### `box` and `row`
 
 Vertical and horizontal containers. `gap` is the spacing in pixels.
@@ -387,7 +390,8 @@ vertically. `sep` is a horizontal separator line.
 
 `{:else if}` is not supported; nest another `{#if}` instead. Lists can be Lua
 arrays or keyed tables. Rows are updated in place while the number of items is
-unchanged; adding or removing items rebuilds that list.
+unchanged; adding or removing items rebuilds that list. A `{#each}` block follows
+the orientation of its parent `box` or `row`.
 
 ### Expressions and escaping
 
@@ -510,10 +514,38 @@ file in the widget folder reloads the widget.
 | `nitroget.json_encode(value)` | convert a Lua value to JSON text |
 | `nitroget.json_decode(text)` | convert JSON text to a Lua value |
 | `nitroget.run(cmd)` | run a shell command and ignore the output |
+| `nitroget.menu(items)` | show a native menu anchored to the clicked element |
 | `nitroget.refresh()` | force an update (timers and handlers do this already) |
 | `nitroget.log(msg)` | print to the terminal |
 | `nitroget.quit()` | stop the daemon |
 | `nitroget.version` | engine version string |
+
+### Menus
+
+`nitroget.menu(items)` opens a native menu anchored to the element that
+dispatched the current click. It must be called from an `on:click` handler.
+
+```lua
+nitroget.menu({
+  { label = "Open", action = "open()" },
+  { separator = true },
+  { label = "Mute", checked = true, action = "toggle_mute()" },
+  { label = "Output", submenu = {
+      { label = "Speakers", action = "use_speakers()" },
+      { label = "Headphones", action = "use_headphones()" },
+  } },
+})
+```
+
+| Field | Meaning |
+| --- | --- |
+| `label` | menu text |
+| `action` | Lua code run when selected |
+| `submenu` | nested item array |
+| `enabled` | `false` disables the item |
+| `checked` | shows a checkmark |
+| `separator` | draws a section separator |
+| `icon` | icon name or absolute file path |
 
 ### Shared and per-output state
 
