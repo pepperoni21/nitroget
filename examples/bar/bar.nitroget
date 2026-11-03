@@ -1,0 +1,129 @@
+<panel name="bar" edge="top" width="full" height="50" layer="top">
+  <box class="card">
+    <box class="screen" hexpand="true" vexpand="true">
+      <grid class="bar" columns="3" vexpand="true" hexpand="true">
+        <row class="left" gap="8" halign="start" vexpand="true">
+          <label class="prompt">>_</label>
+          <label class="brand">NITROGET</label>
+          <label class="sep">::</label>
+          <label class="workspace">01</label>
+          <label class="workspace active">02</label>
+          <label class="workspace">03</label>
+          <label class="workspace">04</label>
+          <label class="workspace">05</label>
+        </row>
+
+        <row class="center" gap="10" halign="center" vexpand="true">
+          <label class="date">TUE 03 NOV 2026</label>
+          <label class="sep">|</label>
+          <label class="clock">12:34</label>
+        </row>
+
+        <row class="right" gap="12" halign="end" vexpand="true">
+          <row class="module" gap="5">
+            <label class="key">CPU</label>
+            <label class="value">12%</label>
+          </row>
+          <row class="module" gap="5">
+            <label class="key">MEM</label>
+            <label class="value">48%</label>
+          </row>
+          <row class="module" gap="5">
+            <label class="key">BAT</label>
+            <label class="value ok">87%</label>
+          </row>
+          <row class="module" gap="5">
+            <label class="key">VOL</label>
+            <label class="value">64%</label>
+          </row>
+          <row class="module" gap="5">
+            <label class="key">NET</label>
+            <label class="value">1.2M</label>
+          </row>
+        </row>
+      </grid>
+    </box>
+  </box>
+</panel>
+
+<style>
+  .card {
+    background-color: #0b0906;
+    border: 2px solid #6e4b12;
+    border-radius: 0;
+    padding: 4px;
+  }
+
+  .screen {
+    background-color: #120d06;
+    border: 1px solid #3a280a;
+    border-radius: 0;
+    padding: 6px 14px;
+  }
+
+  .bar label {
+    font-family: "DejaVu Sans Mono", "Liberation Mono", monospace;
+  }
+
+  .prompt {
+    color: #7bd88f;
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+  .brand {
+    color: #7bd88f;
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+  .sep {
+    color: #4f350d;
+    font-size: 10px;
+  }
+
+  .workspace {
+    color: #8a5a12;
+    font-size: 10px;
+    padding: 3px 6px;
+    margin: 0 1px;
+  }
+
+  .workspace.active {
+    background-color: #ffb000;
+    color: #0b0906;
+    font-weight: 800;
+  }
+
+  .date {
+    color: #a8741e;
+    font-size: 10px;
+  }
+
+  .clock {
+    color: #ffcf6a;
+    font-size: 16px;
+    font-weight: 700;
+  }
+
+  .module {
+    padding-left: 10px;
+    border-left: 1px solid #3a280a;
+  }
+
+  .key {
+    color: #6f470e;
+    font-size: 10px;
+    font-weight: 700;
+  }
+
+  .value {
+    color: #ffb000;
+    font-size: 10px;
+    font-weight: 700;
+  }
+
+  .value.ok {
+    color: #7bd88f;
+  }
+</style>

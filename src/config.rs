@@ -19,7 +19,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
-use crate::component::{self, Component};
+use crate::component::{self, Component, ComponentKind};
 
 pub const FILE_NAME: &str = "config.toml";
 
@@ -171,6 +171,9 @@ impl Config {
 
     /// Applies a per-monitor override, if one exists. Returns whether it did.
     pub fn apply_output_override(&self, comp: &mut Component, keys: &[&str]) -> bool {
+        if matches!(comp.kind, ComponentKind::Panel(_)) {
+            return false;
+        }
         let Some(over) = self.output_override(&comp.name, keys) else {
             return false;
         };
@@ -187,25 +190,28 @@ impl Config {
     /// disabled in the config.
     pub fn apply(&self, comp: &mut Component) -> bool {
         let widget = self.widgets.get(&comp.name);
+        let is_panel = matches!(comp.kind, ComponentKind::Panel(_));
 
         if let Some(widget) = widget {
             if !widget.enabled.unwrap_or(true) {
                 return false;
             }
-            if let Some(anchor) = &widget.anchor {
-                comp.placement.anchor = Some(anchor.to_lowercase());
-            }
-            if let Some(offset) = &widget.offset {
-                comp.placement.offset = Some(offset.pair());
-            }
-            if let Some(width) = widget.width {
-                comp.placement.width = Some(width);
-            }
-            if let Some(height) = widget.height {
-                comp.placement.height = Some(height);
-            }
-            if let Some(layer) = &widget.layer {
-                comp.placement.layer = layer.to_lowercase();
+            if !is_panel {
+                if let Some(anchor) = &widget.anchor {
+                    comp.placement.anchor = Some(anchor.to_lowercase());
+                }
+                if let Some(offset) = &widget.offset {
+                    comp.placement.offset = Some(offset.pair());
+                }
+                if let Some(width) = widget.width {
+                    comp.placement.width = Some(width);
+                }
+                if let Some(height) = widget.height {
+                    comp.placement.height = Some(height);
+                }
+                if let Some(layer) = &widget.layer {
+                    comp.placement.layer = layer.to_lowercase();
+                }
             }
         }
 
@@ -458,6 +464,10 @@ pub fn auto_place(components: &mut [Component], config: &Config) {
             comp.placement.output = Some(config.resolve_output(output));
         }
 
+        if matches!(comp.kind, ComponentKind::Panel(_)) {
+            continue;
+        }
+
         if comp.placement.anchor.is_some() {
             if comp.placement.offset.is_none() {
                 comp.placement.offset = Some((margin, margin));
@@ -484,6 +494,7 @@ mod tests {
         Component {
             path: std::path::PathBuf::from(format!("/w/{name}.nitroget")),
             name: name.into(),
+            kind: ComponentKind::Widget,
             placement: component::Placement {
                 height: Some(height),
                 ..Default::default()
@@ -516,6 +527,47 @@ mod tests {
             config.widgets["b"].offset.as_ref().unwrap().pair(),
             (30, 30)
         );
+    }
+
+    fn panel_component(name: &str, thickness: i32) -> Component {
+        let mut comp = component(name, thickness);
+        comp.placement.width = None;
+        comp.placement.height = None;
+        comp.kind = ComponentKind::Panel(component::Panel {
+            edge: component::PanelEdge::Top,
+            offset: 0,
+            thickness,
+        });
+        comp
+    }
+
+    #[test]
+    fn panels_skip_placement_config_and_auto_placement() {
+        let config: Config = toml::from_str(
+            r#"
+            [widgets.bar]
+            output = "eDP-1"
+            anchor = "bottom-right"
+            offset = [10, 10]
+            width = 400
+            height = 30
+            layer = "overlay"
+            "#,
+        )
+        .unwrap();
+
+        let mut comp = panel_component("bar", 50);
+        assert!(config.apply(&mut comp));
+        assert_eq!(comp.placement.output.as_deref(), Some("eDP-1"));
+        assert!(comp.placement.anchor.is_none());
+        assert!(comp.placement.offset.is_none());
+        assert!(comp.placement.width.is_none());
+        assert!(comp.placement.height.is_none());
+        assert_eq!(comp.placement.layer, "bottom");
+
+        let mut panels = vec![comp];
+        auto_place(&mut panels, &config);
+        assert!(panels[0].placement.anchor.is_none());
     }
 
     #[test]

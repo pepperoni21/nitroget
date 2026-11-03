@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use gtk::prelude::*;
 use mlua::Lua;
 
-use crate::component::{Component, Placement};
+use crate::component::{Component, ComponentKind, PanelEdge, Placement};
 use crate::state::{Msg, WidgetKey};
 
 pub struct TimerEntry {
@@ -72,7 +72,7 @@ impl Instance {
         }
 
         let window = new_window(&comp.name, app, use_layer_shell);
-        apply_placement(&window, None, &comp.placement, use_layer_shell);
+        apply_placement(&window, None, &comp.placement, &comp.kind, use_layer_shell);
 
         let mut instance = Instance {
             key,
@@ -125,6 +125,7 @@ impl Instance {
             &self.window,
             Some(&previous),
             &placement,
+            &self.comp.kind,
             self.use_layer_shell,
         );
     }
@@ -157,6 +158,7 @@ impl Instance {
             &self.window,
             Some(&previous.placement),
             &self.comp.placement,
+            &self.comp.kind,
             self.use_layer_shell,
         );
 
@@ -269,6 +271,7 @@ fn apply_placement(
     window: &gtk::Window,
     previous: Option<&Placement>,
     placement: &Placement,
+    kind: &ComponentKind,
     use_layer_shell: bool,
 ) {
     window.set_default_size(
@@ -315,6 +318,29 @@ fn apply_placement(
             }
         }
     }
+
+    if let ComponentKind::Panel(panel) = kind {
+        let (top, bottom, left, right, edge) = match panel.edge {
+            PanelEdge::Top => (true, false, true, true, Edge::Top),
+            PanelEdge::Bottom => (false, true, true, true, Edge::Bottom),
+            PanelEdge::Left => (true, true, true, false, Edge::Left),
+            PanelEdge::Right => (true, true, false, true, Edge::Right),
+        };
+
+        window.set_anchor(Edge::Top, top);
+        window.set_anchor(Edge::Bottom, bottom);
+        window.set_anchor(Edge::Left, left);
+        window.set_anchor(Edge::Right, right);
+        window.set_margin(Edge::Top, 0);
+        window.set_margin(Edge::Bottom, 0);
+        window.set_margin(Edge::Left, 0);
+        window.set_margin(Edge::Right, 0);
+        window.set_margin(edge, panel.offset);
+        window.set_exclusive_zone(panel.offset + panel.thickness);
+        return;
+    }
+
+    window.set_exclusive_zone(0);
 
     let (top, bottom, left, right) = parse_anchor(placement.anchor());
     window.set_anchor(Edge::Top, top);
