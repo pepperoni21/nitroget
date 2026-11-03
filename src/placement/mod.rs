@@ -19,7 +19,7 @@ use std::time::Duration;
 use anyhow::Result;
 use async_channel::Sender;
 
-use crate::component::{Component, Placement as ComponentPlacement};
+use crate::component::{Component, ComponentKind, Placement as ComponentPlacement};
 use crate::config::{self, PlacementChange};
 use crate::layout::{self, MonitorInfo, Rect};
 use crate::state::{LiveWidget, Msg, PlacementMsg};
@@ -367,7 +367,7 @@ fn load(
     for path in &paths {
         match crate::component::load(path) {
             Ok(mut comp) => {
-                if config.apply(&mut comp) {
+                if config.apply(&mut comp) && matches!(comp.kind, ComponentKind::Widget) {
                     components.push(comp);
                 }
             }

@@ -4,12 +4,14 @@ A widget is a single `.nitroget` file with three blocks: a template, a
 stylesheet and a Lua script. Lua globals are the widget's state; timers and
 event handlers update them, and Nitroget writes only the UI properties that
 changed. Placement and monitor selection are machine-local and never part of the
-widget.
+widget. A `.nitroget` file can also define an edge-attached panel with
+`<panel>`.
 
 ## Contents
 
 - [A minimal widget](#a-minimal-widget)
 - [The `<widget>` root](#the-widget-root)
+- [The `<panel>` root](#the-panel-root)
 - [Template](#template)
   - [Elements](#elements)
   - [Control flow](#control-flow)
@@ -49,9 +51,9 @@ The three blocks are:
 
 | Block | Required | Purpose |
 | --- | --- | --- |
-| `<widget>` | yes | structure, plus intrinsic size and layer |
-| `<style>` | no | GTK CSS, scoped to this widget |
-| `<script>` | no | Lua, inline or loaded with `src`; runs once when the widget loads |
+| `<widget>` or `<panel>` | yes | root surface; `<panel>` is edge-attached |
+| `<style>` | no | GTK CSS, scoped to this surface |
+| `<script>` | no | Lua, inline or loaded with `src`; runs once when the surface loads |
 
 ## The `<widget>` root
 
@@ -83,6 +85,54 @@ Writing `anchor`, `offset` or `output` in a widget is ignored, and
 
 `name` must be unique within a widget folder: it scopes the CSS and is the key
 the placement config uses.
+
+## The `<panel>` root
+
+A `<panel>` is an edge-attached surface for bars and panels. It uses the same
+template, style and script blocks as a widget, but its position comes from the
+file rather than `config.toml`.
+
+```html
+<panel name="bar" edge="top" width="full" height="50" layer="top">
+  <row class="bar" gap="12">
+    <label>left</label>
+    <spacer />
+    <label>right</label>
+  </row>
+</panel>
+```
+
+| Attribute | Default | Meaning |
+| --- | --- | --- |
+| `name` | file stem | CSS scope and the key in `config.toml` |
+| `edge` | required | `top`, `bottom`, `left`, or `right` |
+| `offset` | `0` | gap between the output edge and the panel |
+| `layer` | `bottom` | `bottom`, `top`, `overlay`, or `background` |
+| `width` | | thickness for left/right panels; `full` or omitted for top/bottom |
+| `height` | | thickness for top/bottom panels; `full` or omitted for left/right |
+
+Top and bottom panels span the full output width. Left and right panels span the
+full output height.
+
+Panels are not part of the machine-local placement system. `config.toml` only
+applies `enabled` and `output` to a panel; `anchor`, `offset`, `width`, `height`
+and `layer` in `[widgets.<name>]` are ignored. `nitroget placement` does not
+show panels.
+
+A panel reserves an exclusive zone automatically. The zone is
+`offset + thickness` along its edge, so other windows avoid it. The zone is an
+edge strip only; a panel cannot reserve an arbitrary rectangle in the middle of
+an output.
+
+`output = "all"` creates one panel per monitor. Each copy has its own Lua state,
+timers and streams.
+
+```toml
+[widgets.bar]
+output = "all"
+```
+
+`nitroget check` reports the panel edge, thickness and computed exclusive zone.
 
 ## Template
 
@@ -554,5 +604,7 @@ ignored attributes are reported with the file name. Modules loaded with
 - Text input is single-line. Multi-line editors and general overlay/popover
   elements are not supported.
 - `scroll` scrolls vertically only.
+- Panels are edge-attached. Exclusive zones cannot reserve arbitrary rectangles
+  in the middle of an output.
 - GNOME/Mutter does not implement layer-shell; it is not supported.
 - Widgets run with your user privileges and can execute commands.

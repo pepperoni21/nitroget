@@ -187,7 +187,6 @@ pub fn cmd_check(cli: &Cli) -> Result<()> {
     config::auto_place(&mut enabled, &config);
 
     for comp in &enabled {
-        let (offset_x, offset_y) = comp.placement.offset();
         let output = match (
             comp.placement.output.as_deref(),
             comp.placement.output_index,
@@ -197,24 +196,46 @@ pub fn cmd_check(cli: &Cli) -> Result<()> {
             (None, Some(index)) => format!("monitor #{index}"),
             (None, None) => "auto".to_string(),
         };
-        println!(
-            "ok    {}  [{}] {}x{} anchor={} offset={},{} output={} layer={}",
-            comp.path.display(),
-            comp.name,
-            comp.placement
-                .width
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "auto".into()),
-            comp.placement
-                .height
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "auto".into()),
-            comp.placement.anchor(),
-            offset_x,
-            offset_y,
-            output,
-            comp.placement.layer
-        );
+
+        if let component::ComponentKind::Panel(panel) = &comp.kind {
+            let edge = match panel.edge {
+                component::PanelEdge::Top => "top",
+                component::PanelEdge::Bottom => "bottom",
+                component::PanelEdge::Left => "left",
+                component::PanelEdge::Right => "right",
+            };
+            println!(
+                "ok    {}  [{}] panel edge={} thickness={} offset={} exclusive_zone={} output={} layer={}",
+                comp.path.display(),
+                comp.name,
+                edge,
+                panel.thickness,
+                panel.offset,
+                panel.offset + panel.thickness,
+                output,
+                comp.placement.layer
+            );
+        } else {
+            let (offset_x, offset_y) = comp.placement.offset();
+            println!(
+                "ok    {}  [{}] {}x{} anchor={} offset={},{} output={} layer={}",
+                comp.path.display(),
+                comp.name,
+                comp.placement
+                    .width
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "auto".into()),
+                comp.placement
+                    .height
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "auto".into()),
+                comp.placement.anchor(),
+                offset_x,
+                offset_y,
+                output,
+                comp.placement.layer
+            );
+        }
 
         let lua = mlua::Lua::new();
         if let Err(e) = lua.load(&comp.script).set_name("script").into_function() {

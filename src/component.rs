@@ -73,10 +73,32 @@ impl Placement {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanelEdge {
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Panel {
+    pub edge: PanelEdge,
+    pub offset: i32,
+    pub thickness: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComponentKind {
+    Widget,
+    Panel(Panel),
+}
+
 #[derive(Debug, Clone)]
 pub struct Component {
     pub path: PathBuf,
     pub name: String,
+    pub kind: ComponentKind,
     pub placement: Placement,
     pub template: Vec<Node>,
     pub css: String,
@@ -151,15 +173,21 @@ pub fn parse(src: &str, path: &Path) -> Result<Component> {
             Node::Element(e) => Some(e.clone()),
             _ => None,
         })
-        .ok_or_else(|| anyhow!("no root element (expected <widget>)"))?;
+        .ok_or_else(|| anyhow!("no root element (expected <widget> or <panel>)"))?;
 
-    if root.tag != "widget" {
+    let (kind, placement, notes) = if root.tag == "widget" {
+        let (placement, notes) = placement_from(&root)?;
+        (ComponentKind::Widget, placement, notes)
+    } else if root.tag == "panel" {
+        let (placement, panel, notes) = panel_from(&root)?;
+        (ComponentKind::Panel(panel), placement, notes)
+    } else {
         bail!(
-            "root element must be <widget>, found <{}> (in {})",
+            "root element must be <widget> or <panel>, found <{}> (in {})",
             root.tag,
             path.display()
         );
-    }
+    };
 
     let name = root
         .attr("name")
@@ -167,11 +195,10 @@ pub fn parse(src: &str, path: &Path) -> Result<Component> {
         .or_else(|| path.file_stem().map(|s| s.to_string_lossy().to_string()))
         .unwrap_or_else(|| "widget".into());
 
-    let (placement, notes) = placement_from(&root)?;
-
     Ok(Component {
         path: path.to_path_buf(),
         name,
+        kind,
         placement,
         template: root.children,
         css,
@@ -223,6 +250,90 @@ fn placement_from(root: &Element) -> Result<(Placement, Vec<String>)> {
     }
 
     Ok((p, notes))
+}
+
+fn panel_from(root: &Element) -> Result<(Placement, Panel, Vec<String>)> {
+    let mut p = Placement::default();
+    let notes = Vec::new();
+
+    if let Some(layer) = root.attr("layer") {
+        let layer = layer.trim().to_lowercase();
+        if !is_valid_layer(&layer) {
+            bail!("layer must be background, bottom, top or overlay");
+        }
+        p.layer = layer;
+    }
+
+    let edge = match root.attr("edge").map(str::trim) {
+        Some("top") => PanelEdge::Top,
+        Some("bottom") => PanelEdge::Bottom,
+        Some("left") => PanelEdge::Left,
+        Some("right") => PanelEdge::Right,
+        Some(_) => bail!("panel edge must be top, bottom, left or right"),
+        None => bail!("<panel> requires an edge attribute"),
+    };
+
+    let offset = match root.attr("offset") {
+        Some(value) => nonnegative_attr(value, "offset")?,
+        None => 0,
+    };
+
+    let thickness = match edge {
+        PanelEdge::Top | PanelEdge::Bottom => {
+            if let Some(width) = root.attr("width")
+                && !width.trim().eq_ignore_ascii_case("full")
+            {
+                bail!("top and bottom panels must span the full width");
+            }
+            let height = root
+                .attr("height")
+                .ok_or_else(|| anyhow!("top and bottom panels require a height"))?;
+            positive_attr(height, "height")?
+        }
+        PanelEdge::Left | PanelEdge::Right => {
+            if let Some(height) = root.attr("height")
+                && !height.trim().eq_ignore_ascii_case("full")
+            {
+                bail!("left and right panels must span the full height");
+            }
+            let width = root
+                .attr("width")
+                .ok_or_else(|| anyhow!("left and right panels require a width"))?;
+            positive_attr(width, "width")?
+        }
+    };
+
+    Ok((
+        p,
+        Panel {
+            edge,
+            offset,
+            thickness,
+        },
+        notes,
+    ))
+}
+
+fn positive_attr(value: &str, name: &str) -> Result<i32> {
+    let value: i32 = value
+        .trim()
+        .parse()
+        .map_err(|_| anyhow!("{name} must be a number"))?;
+    if value <= 0 {
+        bail!("{name} must be positive");
+    }
+    Ok(value)
+}
+
+fn nonnegative_attr(value: &str, name: &str) -> Result<i32> {
+    let value: i32 = value
+        .trim()
+        .parse()
+        .map_err(|_| anyhow!("{name} must be a number"))?;
+    if value < 0 {
+        bail!("{name} must be >= 0");
+    }
+    Ok(value)
 }
 
 pub fn is_valid_anchor(anchor: &str) -> bool {
@@ -536,5 +647,79 @@ mod tests {
                 .into_function()
                 .unwrap();
         }
+    }
+
+    #[test]
+    fn parses_horizontal_panel() {
+        let path = Path::new("bar.nitroget");
+        let comp = parse(
+            "<panel name=\"bar\" edge=\"top\" width=\"full\" height=\"32\" layer=\"top\"></panel>",
+            path,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            comp.kind,
+            ComponentKind::Panel(Panel {
+                edge: PanelEdge::Top,
+                offset: 0,
+                thickness: 32
+            })
+        ));
+        assert_eq!(comp.placement.layer, "top");
+    }
+
+    #[test]
+    fn parses_vertical_panel() {
+        let path = Path::new("side.nitroget");
+        let comp = parse(
+            "<panel name=\"side\" edge=\"left\" width=\"40\" height=\"full\" offset=\"6\"></panel>",
+            path,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            comp.kind,
+            ComponentKind::Panel(Panel {
+                edge: PanelEdge::Left,
+                offset: 6,
+                thickness: 40
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_partial_panels() {
+        let path = Path::new("bar.nitroget");
+        let error = parse(
+            "<panel name=\"bar\" edge=\"top\" width=\"300\" height=\"32\"></panel>",
+            path,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("full width"));
+
+        let error = parse(
+            "<panel name=\"bar\" edge=\"left\" width=\"40\" height=\"300\"></panel>",
+            path,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("full height"));
+
+        let error = parse("<panel name=\"bar\" edge=\"top\"></panel>", path).unwrap_err();
+        assert!(error.to_string().contains("require a height"));
+
+        let error = parse(
+            "<panel name=\"bar\" edge=\"middle\" width=\"full\" height=\"32\"></panel>",
+            path,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("edge must be"));
+    }
+
+    #[test]
+    fn widget_is_still_the_default_kind() {
+        let path = Path::new("auto.nitroget");
+        let comp = parse("<widget name=\"auto\"></widget>", path).unwrap();
+        assert_eq!(comp.kind, ComponentKind::Widget);
     }
 }

@@ -1,7 +1,8 @@
 # Nitroget
 
 Desktop widgets for Wayland. A widget is one `.nitroget` file: a template, a
-stylesheet and a Lua script.
+stylesheet and a Lua script. Edge-attached bars use a `<panel>` root in the same
+format.
 
 ![Nitroget example widgets](docs/examples.png)
 

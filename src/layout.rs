@@ -1,6 +1,8 @@
 use gtk::prelude::*;
 
-use crate::component::{Component, DEFAULT_HEIGHT, DEFAULT_WIDTH, Placement};
+use crate::component::{
+    Component, ComponentKind, DEFAULT_HEIGHT, DEFAULT_WIDTH, PanelEdge, Placement,
+};
 use crate::config::Config;
 
 #[derive(Clone)]
@@ -192,17 +194,47 @@ pub fn expand(
                 copy.placement.output = None;
                 copy.placement.output_index = Some(monitor.index);
                 apply_override(&mut copy, config, monitor);
+                resolve_panel(&mut copy, monitor);
                 out.push(copy);
             }
         } else {
             if let Some(index) = resolve_monitor(&comp.placement, monitors) {
                 apply_override(&mut comp, config, &monitors[index]);
+                resolve_panel(&mut comp, &monitors[index]);
+
+                if matches!(comp.kind, ComponentKind::Panel(_))
+                    && comp
+                        .placement
+                        .output
+                        .as_deref()
+                        .is_none_or(|output| matches!(output, "" | "auto" | "focused"))
+                {
+                    comp.placement.output = None;
+                    comp.placement.output_index = Some(monitors[index].index);
+                }
             }
             out.push(comp);
         }
     }
 
     out
+}
+
+fn resolve_panel(comp: &mut Component, monitor: &MonitorInfo) {
+    let ComponentKind::Panel(panel) = &comp.kind else {
+        return;
+    };
+
+    match panel.edge {
+        PanelEdge::Top | PanelEdge::Bottom => {
+            comp.placement.width = Some(monitor.width);
+            comp.placement.height = Some(panel.thickness);
+        }
+        PanelEdge::Left | PanelEdge::Right => {
+            comp.placement.width = Some(panel.thickness);
+            comp.placement.height = Some(monitor.height);
+        }
+    }
 }
 
 fn apply_override(comp: &mut Component, config: &Config, monitor: &MonitorInfo) {
