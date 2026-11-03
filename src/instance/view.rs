@@ -54,6 +54,11 @@ impl Instance {
             let empty = gtk::cairo::Region::create();
             surface.set_input_region(Some(&empty));
         }
+
+        if self.use_layer_shell {
+            use gtk4_layer_shell::LayerShell;
+            self.window.set_exclusive_zone(0);
+        }
     }
 
     /// Frees the widget's content and Lua heap while keeping the surface mapped
