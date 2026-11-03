@@ -22,7 +22,7 @@ use async_channel::Sender;
 use crate::component::{Component, ComponentKind, Placement as ComponentPlacement};
 use crate::config::{self, PlacementChange};
 use crate::layout::{self, MonitorInfo, Rect};
-use crate::state::{LiveWidget, Msg, PlacementMsg};
+use crate::state::{LiveWidget, Msg, PlacementMsg, WidgetKey};
 
 use overlay::Overlay;
 
@@ -105,7 +105,7 @@ impl Placement {
         }
     }
 
-    pub fn toggle(&mut self, live: &HashMap<String, LiveWidget>) {
+    pub fn toggle(&mut self, live: &HashMap<WidgetKey, LiveWidget>) {
         if self.active {
             self.cancel();
         } else {
@@ -113,7 +113,7 @@ impl Placement {
         }
     }
 
-    pub fn start(&mut self, live: &HashMap<String, LiveWidget>) {
+    pub fn start(&mut self, live: &HashMap<WidgetKey, LiveWidget>) {
         if self.active {
             return;
         }
@@ -146,7 +146,7 @@ impl Placement {
         // the running instances which monitor they actually landed on.
         for comp in &mut components {
             if comp.placement.output.is_none()
-                && let Some(info) = live.get(&comp.name)
+                && let Some(info) = live.get(&(comp.path.clone(), comp.placement.output_index))
             {
                 comp.placement.output = Some(info.connector.clone());
             }
@@ -180,7 +180,7 @@ impl Placement {
             let monitor = &monitors[index];
             // Prefer the size GTK actually gave the mapped surface.
             let mut placement = comp.placement.clone();
-            if let Some(info) = live.get(&comp.name)
+            if let Some(info) = live.get(&(comp.path.clone(), comp.placement.output_index))
                 && info.width > 0
                 && info.height > 0
             {

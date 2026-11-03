@@ -1,13 +1,13 @@
 local base = "http://127.0.0.1:11434"
 
 local function models(callback)
-  nitroget.exec("curl -fsS --max-time 2 " .. base .. "/api/tags", function(ok, output)
+  nitroget.exec("curl -fsS --max-time 2 " .. base .. "/api/tags", function(ok, text)
     if not ok then
-      callback(false, {}, output)
+      callback(false, {}, text)
       return
     end
 
-    local decoded, data = pcall(nitroget.json_decode, output)
+    local decoded, data = pcall(nitroget.json_decode, text)
     if not decoded or type(data) ~= "table" then
       callback(false, {}, "invalid response")
       return

@@ -75,6 +75,7 @@ pub fn decide(
 pub fn can_update_in_place(old: &Placement, new: &Placement) -> bool {
     old.output == new.output
         && old.output_index == new.output_index
+        && old.connector == new.connector
         && old.layer == new.layer
         && old.width == new.width
         && old.height == new.height
@@ -399,6 +400,20 @@ mod tests {
         let old = placement();
         let mut new = placement();
         new.output = Some("DP-1".into());
+
+        let existing = Existing {
+            mtime: t(1),
+            placement: &old,
+            state: WidgetState::Active,
+        };
+        assert_eq!(decide(Some(existing), t(1), &new), Decision::Replace);
+    }
+
+    #[test]
+    fn replaces_when_connector_changes() {
+        let old = placement();
+        let mut new = placement();
+        new.connector = Some("DP-1".into());
 
         let existing = Existing {
             mtime: t(1),

@@ -454,11 +454,15 @@ impl AppState {
         }
     }
 
-    fn live_widgets(&self) -> HashMap<String, LiveWidget> {
+    fn live_widgets(&self) -> HashMap<WidgetKey, LiveWidget> {
         let display = gtk::gdk::Display::default();
         let mut map = HashMap::new();
 
-        for running in self.widgets.values() {
+        for running in self
+            .widgets
+            .values()
+            .filter(|running| running.state == WidgetState::Active)
+        {
             let instance = &running.instance;
             let Some(display) = display.as_ref() else {
                 continue;
@@ -473,7 +477,7 @@ impl AppState {
                 continue;
             };
             map.insert(
-                instance.comp.name.clone(),
+                instance.key.clone(),
                 LiveWidget {
                     connector: connector.to_string(),
                     width: instance.window.width(),

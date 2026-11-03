@@ -211,7 +211,7 @@ pub fn cmd_check(cli: &Cli) -> Result<()> {
                 edge,
                 panel.thickness,
                 panel.offset,
-                panel.offset + panel.thickness,
+                panel.exclusive_zone(),
                 output,
                 comp.placement.layer
             );

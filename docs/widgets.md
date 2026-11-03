@@ -117,9 +117,9 @@ Top and bottom panels span the full output width. Left and right panels span the
 full output height.
 
 Panels are not part of the machine-local placement system. `config.toml` only
-applies `enabled` and `output` to a panel; `anchor`, `offset`, `width`, `height`
-and `layer` in `[widgets.<name>]` are ignored. `nitroget placement` does not
-show panels.
+applies `enabled` and `output` to a panel; `anchor`, `offset`, `width`, `height`,
+`layer` and per-monitor `outputs` overrides in `[widgets.<name>]` are ignored.
+`nitroget placement` does not show panels.
 
 A panel reserves an exclusive zone automatically. The zone is
 `offset + thickness` along its edge, so other windows avoid it. The zone is an
@@ -550,8 +550,9 @@ fields the script assigns. Globals are shared; `output.<field>` belongs to one
 monitor. The global `output` name is reserved by the engine; use
 `nitroget.outputs` to iterate every active output.
 
-For an output chosen by the compositor, `connector` can be empty and `index` can
-be nil. When no connector is resolved, the table is keyed by a synthetic index.
+For per-monitor copies, `index` identifies the monitor. A single-output widget
+may have a nil `index`. When the compositor chooses the output, `connector` can
+be empty and the table is keyed by a synthetic index.
 
 ### Per-output timers
 

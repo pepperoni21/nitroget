@@ -140,8 +140,16 @@ impl Instance {
     pub fn set_output_context(&self) {
         let connector = self.comp.placement.connector.clone().unwrap_or_default();
         let index = self.comp.placement.output_index;
-        let width = self.window.width();
-        let height = self.window.height();
+        let width = self
+            .comp
+            .placement
+            .width
+            .unwrap_or_else(|| self.window.width());
+        let height = self
+            .comp
+            .placement
+            .height
+            .unwrap_or_else(|| self.window.height());
 
         if let Ok(mut runtime) = self.runtime.try_borrow_mut()
             && let Err(e) = runtime.set_output_context(&connector, index, width, height)
@@ -275,7 +283,7 @@ fn apply_placement(
         window.set_margin(Edge::Left, 0);
         window.set_margin(Edge::Right, 0);
         window.set_margin(edge, panel.offset);
-        window.set_exclusive_zone(panel.offset + panel.thickness);
+        window.set_exclusive_zone(panel.exclusive_zone());
         return;
     }
 

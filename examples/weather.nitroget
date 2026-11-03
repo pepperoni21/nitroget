@@ -221,10 +221,10 @@
     return string.format("%.0f°", number)
   end
 
-  local function parse(output)
+  local function parse(text)
     local days = {}
 
-    for line in output:gmatch("[^\r\n]+") do
+    for line in text:gmatch("[^\r\n]+") do
       local fields = {}
       for field in (line .. "|"):gmatch("(.-)|") do
         fields[#fields + 1] = field
@@ -272,10 +272,10 @@
     fetching = true
     status = "updating"
 
-    nitroget.exec(command, function(ok, output)
+    nitroget.exec(command, function(ok, text)
       fetching = false
-      if ok and output:sub(1, 2) == "C|" then
-        parse(output)
+      if ok and text:sub(1, 2) == "C|" then
+        parse(text)
         status = ""
       else
         status = "offline · showing last data"

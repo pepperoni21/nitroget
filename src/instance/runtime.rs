@@ -113,13 +113,19 @@ fn spawn_stream(
         .stderr(Stdio::piped());
 
     let mut child = process.spawn()?;
-    let mut stdin = child.stdin.take();
+    let stdin = child.stdin.take();
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     let shared = Arc::new(Mutex::new(child));
     let worker = shared.clone();
 
     thread::spawn(move || {
+        let writer = stdin.map(|mut stdin| {
+            thread::spawn(move || {
+                let _ = stdin.write_all(input.as_bytes());
+            })
+        });
+
         let stderr_thread = stderr.map(|stderr| {
             thread::spawn(move || {
                 let mut text = String::new();
@@ -128,11 +134,6 @@ fn spawn_stream(
                 text
             })
         });
-
-        if let Some(stdin) = stdin.as_mut() {
-            let _ = stdin.write_all(input.as_bytes());
-        }
-        drop(stdin);
 
         if let Some(stdout) = stdout {
             for line in BufReader::new(stdout).lines() {
@@ -151,6 +152,7 @@ fn spawn_stream(
         let error = stderr_thread
             .and_then(|handle| handle.join().ok())
             .unwrap_or_default();
+        let _ = writer.and_then(|handle| handle.join().ok());
         let ok = status.is_some_and(|status| status.success());
 
         let _ = tx.send_blocking(Msg::StreamDone {
@@ -454,10 +456,22 @@ impl WidgetRuntime {
                         let id = next_id();
                         let context = current_output.borrow().clone();
                         stream_contexts.borrow_mut().insert(id, context);
-                        let shared = spawn_stream(cmd, input, tx.clone(), path.clone(), id)
-                            .map_err(mlua::Error::external)?;
-                        streams.borrow_mut().insert(id, shared);
-                        store_stream(lua, id, line, done)?;
+                        let shared = match spawn_stream(cmd, input, tx.clone(), path.clone(), id) {
+                            Ok(shared) => shared,
+                            Err(e) => {
+                                stream_contexts.borrow_mut().remove(&id);
+                                return Err(mlua::Error::external(e));
+                            }
+                        };
+                        streams.borrow_mut().insert(id, shared.clone());
+                        if let Err(e) = store_stream(lua, id, line, done) {
+                            streams.borrow_mut().remove(&id);
+                            stream_contexts.borrow_mut().remove(&id);
+                            if let Ok(mut child) = shared.lock() {
+                                let _ = child.kill();
+                            }
+                            return Err(e);
+                        }
                         Ok(id)
                     },
                 )?,
@@ -764,6 +778,13 @@ impl WidgetRuntime {
             }
         }
         self.stream_contexts.borrow_mut().clear();
+    }
+}
+
+impl Drop for WidgetRuntime {
+    fn drop(&mut self) {
+        self.drain_timers();
+        self.drain_streams();
     }
 }
 

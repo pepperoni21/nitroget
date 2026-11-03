@@ -91,6 +91,12 @@ pub struct Panel {
     pub thickness: i32,
 }
 
+impl Panel {
+    pub fn exclusive_zone(&self) -> i32 {
+        self.offset.saturating_add(self.thickness)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComponentKind {
     Widget,
@@ -267,7 +273,8 @@ fn panel_from(root: &Element) -> Result<(Placement, Panel, Vec<String>)> {
         p.layer = layer;
     }
 
-    let edge = match root.attr("edge").map(str::trim) {
+    let edge_attr = root.attr("edge").map(|value| value.trim().to_lowercase());
+    let edge = match edge_attr.as_deref() {
         Some("top") => PanelEdge::Top,
         Some("bottom") => PanelEdge::Bottom,
         Some("left") => PanelEdge::Left,
@@ -724,5 +731,15 @@ mod tests {
         let path = Path::new("auto.nitroget");
         let comp = parse("<widget name=\"auto\"></widget>", path).unwrap();
         assert_eq!(comp.kind, ComponentKind::Widget);
+    }
+
+    #[test]
+    fn panel_exclusive_zone_saturates() {
+        let panel = Panel {
+            edge: PanelEdge::Top,
+            offset: i32::MAX,
+            thickness: 10,
+        };
+        assert_eq!(panel.exclusive_zone(), i32::MAX);
     }
 }
