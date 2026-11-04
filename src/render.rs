@@ -1199,7 +1199,6 @@ impl Instance {
                 );
             }
             self.tree = Some(tree);
-            self.set_default_menu_anchor();
             self.sync_keyboard_mode();
             return;
         }
@@ -1208,7 +1207,6 @@ impl Instance {
             Ok(tree) => {
                 self.window.set_child(Some(&tree.root));
                 self.tree = Some(tree);
-                self.set_default_menu_anchor();
                 self.sync_keyboard_mode();
             }
             Err(e) => {

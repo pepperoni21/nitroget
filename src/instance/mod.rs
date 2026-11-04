@@ -1,3 +1,4 @@
+mod menu;
 mod runtime;
 mod view;
 
@@ -12,7 +13,8 @@ use mlua::Lua;
 use crate::component::{Component, ComponentKind, PanelEdge, Placement};
 use crate::state::{Msg, WidgetKey};
 
-pub use runtime::{DEFAULT_MENU_ANCHOR, MENU_ANCHOR, MenuAnchor, WidgetRuntime};
+pub use menu::{MENU_ANCHOR, MenuAnchor};
+pub use runtime::WidgetRuntime;
 
 pub struct Instance {
     pub key: WidgetKey,
@@ -139,24 +141,6 @@ impl Instance {
         Ok(())
     }
 
-    pub fn set_default_menu_anchor(&self) {
-        let parent = self
-            .tree
-            .as_ref()
-            .map(|tree| tree.root.clone())
-            .unwrap_or_else(|| self.window.clone().upcast());
-        DEFAULT_MENU_ANCHOR.with(|slot| {
-            *slot.borrow_mut() = Some(MenuAnchor {
-                window: self.window.clone(),
-                parent,
-                key: self.key.clone(),
-                x: self.window.width() as f64 / 2.0,
-                y: 0.0,
-                layer_shell: self.use_layer_shell,
-            });
-        });
-    }
-
     pub fn set_output_context(&self) {
         let connector = self.comp.placement.connector.clone().unwrap_or_default();
         let index = self.comp.placement.output_index;
@@ -171,10 +155,24 @@ impl Instance {
             .height
             .unwrap_or_else(|| self.window.height());
 
-        if let Ok(mut runtime) = self.runtime.try_borrow_mut()
-            && let Err(e) = runtime.set_output_context(&connector, index, width, height)
-        {
-            eprintln!("nitroget: cannot set output context: {e}");
+        let parent = self
+            .tree
+            .as_ref()
+            .map(|tree| tree.root.clone())
+            .unwrap_or_else(|| self.window.clone().upcast());
+
+        if let Ok(mut runtime) = self.runtime.try_borrow_mut() {
+            if let Err(e) = runtime.set_output_context(&connector, index, width, height) {
+                eprintln!("nitroget: cannot set output context: {e}");
+            }
+            runtime.set_menu_anchor(MenuAnchor {
+                window: self.window.clone(),
+                parent,
+                key: self.key.clone(),
+                x: width as f64 / 2.0,
+                y: 0.0,
+                layer_shell: self.use_layer_shell,
+            });
         }
     }
 

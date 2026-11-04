@@ -549,7 +549,7 @@ nitroget.menu({
 
 | Field | Meaning |
 | --- | --- |
-| `id` | value passed to `on_select` |
+| `id` | value passed to `on_select`; keeps its Lua type |
 | `label` | menu text |
 | `action` | Lua code run when selected; alternative to `id` |
 | `submenu` | nested item array |
@@ -563,6 +563,8 @@ nitroget.menu({
 | --- | --- |
 | `on_select` | callback `(id, checked)` for items with an `id` |
 | `x`, `y` | position relative to the widget root |
+
+Numeric ids stay numbers; string ids stay strings.
 
 ### Shared and per-output state
 
