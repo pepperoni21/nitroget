@@ -1,7 +1,6 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gtk::glib::variant::ToVariant;
 use gtk::prelude::*;
 use mlua::{Function, Lua, Table, Value};
 
@@ -19,8 +18,7 @@ pub struct MenuAnchor {
 
 thread_local! {
     pub static MENU_ANCHOR: RefCell<Option<MenuAnchor>> = const { RefCell::new(None) };
-    static OPEN_MENU: RefCell<Option<gtk::Popover>> = const { RefCell::new(None) };
-    static FLAT_MENU: RefCell<Option<FlatMenuState>> = const { RefCell::new(None) };
+    static OPEN_MENU: RefCell<Option<MenuState>> = const { RefCell::new(None) };
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,6 +26,27 @@ enum MenuLayout {
     Native,
     Row,
     Column,
+}
+
+impl MenuLayout {
+    fn orientation(self) -> gtk::Orientation {
+        match self {
+            Self::Row => gtk::Orientation::Horizontal,
+            Self::Native | Self::Column => gtk::Orientation::Vertical,
+        }
+    }
+
+    fn default_close_on_select(self) -> bool {
+        !matches!(self, Self::Row | Self::Column)
+    }
+
+    fn allows_submenus(self) -> bool {
+        matches!(self, Self::Native)
+    }
+
+    fn allows_separators(self) -> bool {
+        !matches!(self, Self::Row)
+    }
 }
 
 struct MenuNode {
@@ -38,6 +57,7 @@ struct MenuNode {
     submenu: Vec<MenuNode>,
     enabled: bool,
     checked: bool,
+    selected: bool,
     separator: bool,
     icon: Option<String>,
 }
@@ -66,6 +86,7 @@ fn parse_menu_nodes(items: &Table) -> mlua::Result<Vec<MenuNode>> {
                 submenu: Vec::new(),
                 enabled: true,
                 checked: false,
+                selected: false,
                 separator: true,
                 icon: None,
             });
@@ -85,6 +106,7 @@ fn parse_menu_nodes(items: &Table) -> mlua::Result<Vec<MenuNode>> {
             submenu,
             enabled: item.get::<Option<bool>>("enabled")?.unwrap_or(true),
             checked: item.get::<Option<bool>>("checked")?.unwrap_or(false),
+            selected: item.get::<Option<bool>>("selected")?.unwrap_or(false),
             separator: false,
             icon: item.get::<Option<String>>("icon")?,
         });
@@ -110,143 +132,45 @@ fn parse_menu_options(options: Option<Table>) -> mlua::Result<MenuOptions> {
             x: None,
             y: None,
             layout: MenuLayout::Native,
-            close_on_select: false,
+            close_on_select: MenuLayout::Native.default_close_on_select(),
             callback: None,
         });
     };
 
+    let layout = parse_layout(options.get::<Option<String>>("layout")?)?;
+
     Ok(MenuOptions {
         x: options.get::<Option<f64>>("x")?,
         y: options.get::<Option<f64>>("y")?,
-        layout: parse_layout(options.get::<Option<String>>("layout")?)?,
+        layout,
         close_on_select: options
             .get::<Option<bool>>("close_on_select")?
-            .unwrap_or(false),
+            .unwrap_or(layout.default_close_on_select()),
         callback: options.get::<Option<Function>>("on_select")?,
     })
 }
 
-struct FlatMenuState {
+struct MenuState {
     anchor: MenuAnchor,
     options: MenuOptions,
     lua: Lua,
     output: Option<Table>,
     current_output: Rc<RefCell<Option<String>>>,
     tx: async_channel::Sender<Msg>,
-    row: gtk::Box,
+    container: gtk::Box,
     popover: gtk::Popover,
 }
 
 struct MenuContext<'a> {
-    group: &'a gtk::gio::SimpleActionGroup,
     lua: &'a Lua,
     callback: Option<&'a Function>,
     output: Option<&'a Table>,
     current_output: &'a Rc<RefCell<Option<String>>>,
     tx: &'a async_channel::Sender<Msg>,
     key: &'a WidgetKey,
-}
-
-fn append_menu(
-    target: &gtk::gio::Menu,
-    nodes: &[MenuNode],
-    context: &MenuContext<'_>,
-    counter: &mut usize,
-) {
-    let mut section = gtk::gio::Menu::new();
-    let mut has_items = false;
-
-    for node in nodes {
-        if node.separator {
-            if has_items {
-                target.append_section(None, &section);
-                section = gtk::gio::Menu::new();
-                has_items = false;
-            }
-            continue;
-        }
-
-        let marker = match node.item_type.as_deref() {
-            Some("radio") => Some(if node.checked { "● " } else { "○ " }),
-            Some("check") => Some(if node.checked { "✓ " } else { "  " }),
-            _ => None,
-        };
-        let label = match marker {
-            Some(marker) => format!("{marker}{}", node.label),
-            None => node.label.clone(),
-        };
-
-        let item = if !node.submenu.is_empty() {
-            let submenu = gtk::gio::Menu::new();
-            append_menu(&submenu, &node.submenu, context, counter);
-            gtk::gio::MenuItem::new_submenu(Some(&label), &submenu)
-        } else if node.id.is_some() || node.action.is_some() {
-            let name = format!("item_{}", *counter);
-            *counter += 1;
-
-            let simple = gtk::gio::SimpleAction::new(&name, None);
-            simple.set_enabled(node.enabled);
-            let lua = context.lua.clone();
-            let callback = context.callback.cloned();
-            let output = context.output.cloned();
-            let current_output = context.current_output.clone();
-            let tx = context.tx.clone();
-            let key = context.key.clone();
-            let id = node.id.clone();
-            let output_key = current_output.borrow().clone();
-            let code = node.action.clone();
-            let checked = if matches!(node.item_type.as_deref(), Some("check" | "radio")) {
-                !node.checked
-            } else {
-                false
-            };
-            simple.connect_activate(move |_, _| {
-                if let Some(callback) = &callback {
-                    *current_output.borrow_mut() = output_key.clone();
-                    if let Some(output) = &output {
-                        let _ = lua.globals().set("output", output.clone());
-                    }
-                    let item_id = id.clone().unwrap_or(Value::Nil);
-                    if let Err(error) = callback.call::<()>((item_id, checked)) {
-                        eprintln!("nitroget: menu callback error: {error}");
-                    }
-                    let _ = tx.try_send(Msg::Render {
-                        path: key.0.clone(),
-                    });
-                } else if let Some(code) = &code {
-                    let _ = tx.try_send(Msg::MenuAction {
-                        key: key.clone(),
-                        code: code.clone(),
-                    });
-                }
-            });
-            context.group.add_action(&simple);
-
-            gtk::gio::MenuItem::new(Some(&label), Some(&format!("menu.{name}")))
-        } else {
-            gtk::gio::MenuItem::new(Some(&label), None)
-        };
-
-        if !node.enabled {
-            item.set_attribute_value("enabled", Some(&false.to_variant()));
-        }
-
-        if let Some(icon) = &node.icon {
-            let icon = if icon.starts_with('/') {
-                gtk::gio::FileIcon::new(&gtk::gio::File::for_path(icon)).upcast::<gtk::gio::Icon>()
-            } else {
-                gtk::gio::ThemedIcon::new(icon).upcast::<gtk::gio::Icon>()
-            };
-            item.set_icon(&icon);
-        }
-
-        section.append_item(&item);
-        has_items = true;
-    }
-
-    if has_items {
-        target.append_section(None, &section);
-    }
+    close_on_select: bool,
+    root: &'a gtk::Popover,
+    layout: MenuLayout,
 }
 
 pub fn show_menu(
@@ -261,243 +185,10 @@ pub fn show_menu(
     let nodes = parse_menu_nodes(&items)?;
     let options = parse_menu_options(options)?;
 
-    match options.layout {
-        MenuLayout::Native => {
-            show_vertical_menu(nodes, anchor, options, lua, output, current_output, tx)
-        }
-        MenuLayout::Row => show_flat_menu(FlatMenuRequest {
-            nodes,
-            anchor,
-            options,
-            lua,
-            output,
-            current_output,
-            tx,
-            orientation: gtk::Orientation::Horizontal,
-        }),
-        MenuLayout::Column => show_flat_menu(FlatMenuRequest {
-            nodes,
-            anchor,
-            options,
-            lua,
-            output,
-            current_output,
-            tx,
-            orientation: gtk::Orientation::Vertical,
-        }),
-    }
-}
-
-pub fn close_menu() {
-    let old = OPEN_MENU.with(|slot| slot.borrow_mut().take());
-    FLAT_MENU.with(|slot| *slot.borrow_mut() = None);
-    if let Some(popover) = old {
-        popover.popdown();
-    }
-}
-
-pub fn update_menu(items: Table) -> mlua::Result<()> {
-    let nodes = parse_menu_nodes(&items)?;
-    FLAT_MENU.with(|slot| {
-        let slot = slot.borrow();
-        let Some(state) = slot.as_ref() else {
-            return Ok(());
-        };
-        let context = FlatContext {
-            lua: &state.lua,
-            callback: state.options.callback.as_ref(),
-            output: state.output.as_ref(),
-            current_output: &state.current_output,
-            tx: &state.tx,
-            key: &state.anchor.key,
-            close_on_select: state.options.close_on_select,
-            popover: &state.popover,
-        };
-        build_flat_menu(&state.row, &nodes, &context);
-        Ok(())
-    })
-}
-
-fn show_vertical_menu(
-    nodes: Vec<MenuNode>,
-    anchor: MenuAnchor,
-    options: MenuOptions,
-    lua: Lua,
-    output: Option<Table>,
-    current_output: Rc<RefCell<Option<String>>>,
-    tx: async_channel::Sender<Msg>,
-) -> mlua::Result<()> {
-    let menu = gtk::gio::Menu::new();
-    let group = gtk::gio::SimpleActionGroup::new();
-    let mut counter = 0usize;
-    let context = MenuContext {
-        group: &group,
-        lua: &lua,
-        callback: options.callback.as_ref(),
-        output: output.as_ref(),
-        current_output: &current_output,
-        tx: &tx,
-        key: &anchor.key,
-    };
-    append_menu(&menu, &nodes, &context, &mut counter);
-
     let old = OPEN_MENU.with(|slot| slot.borrow_mut().take());
     if let Some(old) = old {
-        old.popdown();
-        old.unparent();
-    }
-
-    let popover = gtk::PopoverMenu::from_model(Some(&menu));
-    popover.add_css_class("nitroget-menu");
-    popover.set_has_arrow(false);
-    popover.set_parent(&anchor.parent);
-    popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
-        options.x.unwrap_or(anchor.x).round() as i32,
-        options.y.unwrap_or(anchor.y).round() as i32,
-        1,
-        1,
-    )));
-    popover.insert_action_group("menu", Some(&group));
-
-    let window = anchor.window.clone();
-    let layer_shell = anchor.layer_shell;
-    popover.connect_closed(move |popover| {
-        popover.unparent();
-        OPEN_MENU.with(|slot| *slot.borrow_mut() = None);
-        FLAT_MENU.with(|slot| *slot.borrow_mut() = None);
-        if layer_shell {
-            use gtk4_layer_shell::LayerShell;
-            window.set_keyboard_mode(gtk4_layer_shell::KeyboardMode::None);
-        }
-    });
-
-    OPEN_MENU.with(|slot| *slot.borrow_mut() = Some(popover.clone().upcast()));
-
-    if layer_shell {
-        use gtk4_layer_shell::LayerShell;
-        anchor
-            .window
-            .set_keyboard_mode(gtk4_layer_shell::KeyboardMode::OnDemand);
-    }
-
-    popover.popup();
-    popover.child_focus(gtk::DirectionType::TabForward);
-    Ok(())
-}
-
-struct FlatContext<'a> {
-    lua: &'a Lua,
-    callback: Option<&'a Function>,
-    output: Option<&'a Table>,
-    current_output: &'a Rc<RefCell<Option<String>>>,
-    tx: &'a async_channel::Sender<Msg>,
-    key: &'a WidgetKey,
-    close_on_select: bool,
-    popover: &'a gtk::Popover,
-}
-
-fn build_flat_menu(row: &gtk::Box, nodes: &[MenuNode], context: &FlatContext<'_>) {
-    while let Some(child) = row.first_child() {
-        row.remove(&child);
-    }
-
-    for node in nodes {
-        if node.separator || !node.submenu.is_empty() {
-            continue;
-        }
-
-        let button = gtk::Button::new();
-        let content = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-        if let Some(icon) = &node.icon {
-            let image = if icon.starts_with('/') {
-                gtk::Image::from_file(icon)
-            } else {
-                gtk::Image::from_icon_name(icon)
-            };
-            image.set_pixel_size(14);
-            content.append(&image);
-        }
-        if !node.label.is_empty() {
-            content.append(&gtk::Label::new(Some(&node.label)));
-        }
-        button.set_child(Some(&content));
-        button.add_css_class("menu-item");
-        if node.checked {
-            button.add_css_class("selected");
-        }
-        let locked = node.checked && !node.enabled;
-        button.set_sensitive(node.enabled || locked);
-        if locked {
-            button.set_can_target(false);
-            button.set_can_focus(false);
-        }
-
-        let lua = context.lua.clone();
-        let callback = context.callback.cloned();
-        let output = context.output.cloned();
-        let current_output = context.current_output.clone();
-        let output_key = current_output.borrow().clone();
-        let tx = context.tx.clone();
-        let key = context.key.clone();
-        let id = node.id.clone();
-        let code = node.action.clone();
-        let checked = !node.checked;
-        let popover = context.popover.clone();
-        let close_on_select = context.close_on_select;
-        button.connect_clicked(move |_| {
-            if let Some(callback) = &callback {
-                *current_output.borrow_mut() = output_key.clone();
-                if let Some(output) = &output {
-                    let _ = lua.globals().set("output", output.clone());
-                }
-                let item_id = id.clone().unwrap_or(Value::Nil);
-                if let Err(error) = callback.call::<()>((item_id, checked)) {
-                    eprintln!("nitroget: menu callback error: {error}");
-                }
-                let _ = tx.try_send(Msg::Render {
-                    path: key.0.clone(),
-                });
-            } else if let Some(code) = &code {
-                let _ = tx.try_send(Msg::MenuAction {
-                    key: key.clone(),
-                    code: code.clone(),
-                });
-            }
-            if close_on_select {
-                popover.popdown();
-            }
-        });
-
-        row.append(&button);
-    }
-}
-
-struct FlatMenuRequest {
-    nodes: Vec<MenuNode>,
-    anchor: MenuAnchor,
-    options: MenuOptions,
-    lua: Lua,
-    output: Option<Table>,
-    current_output: Rc<RefCell<Option<String>>>,
-    tx: async_channel::Sender<Msg>,
-    orientation: gtk::Orientation,
-}
-
-fn show_flat_menu(request: FlatMenuRequest) -> mlua::Result<()> {
-    let FlatMenuRequest {
-        nodes,
-        anchor,
-        options,
-        lua,
-        output,
-        current_output,
-        tx,
-        orientation,
-    } = request;
-    let old = OPEN_MENU.with(|slot| slot.borrow_mut().take());
-    if let Some(old) = old {
-        old.popdown();
-        old.unparent();
+        old.popover.popdown();
+        old.popover.unparent();
     }
 
     let popover = gtk::Popover::new();
@@ -511,10 +202,10 @@ fn show_flat_menu(request: FlatMenuRequest) -> mlua::Result<()> {
         1,
     )));
 
-    let row = gtk::Box::new(orientation, 4);
-    popover.set_child(Some(&row));
+    let container = gtk::Box::new(options.layout.orientation(), 2);
+    popover.set_child(Some(&container));
 
-    let context = FlatContext {
+    let context = MenuContext {
         lua: &lua,
         callback: options.callback.as_ref(),
         output: output.as_ref(),
@@ -522,32 +213,36 @@ fn show_flat_menu(request: FlatMenuRequest) -> mlua::Result<()> {
         tx: &tx,
         key: &anchor.key,
         close_on_select: options.close_on_select,
-        popover: &popover,
+        root: &popover,
+        layout: options.layout,
     };
-    build_flat_menu(&row, &nodes, &context);
+    build_menu(&container, &nodes, &context);
 
     let window = anchor.window.clone();
     let layer_shell = anchor.layer_shell;
     popover.connect_closed(move |popover| {
         popover.unparent();
-        OPEN_MENU.with(|slot| *slot.borrow_mut() = None);
-        FLAT_MENU.with(|slot| *slot.borrow_mut() = None);
+        OPEN_MENU.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if slot.as_ref().is_some_and(|state| state.popover == *popover) {
+                *slot = None;
+            }
+        });
         if layer_shell {
             use gtk4_layer_shell::LayerShell;
             window.set_keyboard_mode(gtk4_layer_shell::KeyboardMode::None);
         }
     });
 
-    OPEN_MENU.with(|slot| *slot.borrow_mut() = Some(popover.clone()));
-    FLAT_MENU.with(|slot| {
-        *slot.borrow_mut() = Some(FlatMenuState {
+    OPEN_MENU.with(|slot| {
+        *slot.borrow_mut() = Some(MenuState {
             anchor: anchor.clone(),
             options,
             lua,
             output,
             current_output,
             tx,
-            row,
+            container,
             popover: popover.clone(),
         });
     });
@@ -564,10 +259,233 @@ fn show_flat_menu(request: FlatMenuRequest) -> mlua::Result<()> {
     Ok(())
 }
 
+pub fn close_menu() {
+    let old = OPEN_MENU.with(|slot| slot.borrow_mut().take());
+    if let Some(state) = old {
+        state.popover.popdown();
+    }
+}
+
+pub fn update_menu(items: Table) -> mlua::Result<()> {
+    let nodes = parse_menu_nodes(&items)?;
+    OPEN_MENU.with(|slot| {
+        let slot = slot.borrow();
+        let Some(state) = slot.as_ref() else {
+            return Ok(());
+        };
+        let context = MenuContext {
+            lua: &state.lua,
+            callback: state.options.callback.as_ref(),
+            output: state.output.as_ref(),
+            current_output: &state.current_output,
+            tx: &state.tx,
+            key: &state.anchor.key,
+            close_on_select: state.options.close_on_select,
+            root: &state.popover,
+            layout: state.options.layout,
+        };
+        build_menu(&state.container, &nodes, &context);
+        Ok(())
+    })
+}
+
+fn build_menu(container: &gtk::Box, nodes: &[MenuNode], context: &MenuContext<'_>) {
+    while let Some(child) = container.first_child() {
+        container.remove(&child);
+    }
+
+    for node in nodes {
+        if node.separator {
+            if context.layout.allows_separators() {
+                container.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+            }
+            continue;
+        }
+
+        if !node.submenu.is_empty() {
+            if context.layout.allows_submenus() {
+                container.append(&build_submenu(node, context));
+            }
+            continue;
+        }
+
+        container.append(&build_item(node, context));
+    }
+}
+
+fn build_item(node: &MenuNode, context: &MenuContext<'_>) -> gtk::Button {
+    let button = gtk::Button::new();
+    button.set_child(Some(&item_content(node)));
+    button.add_css_class("menu-item");
+    if node.selected {
+        button.add_css_class("selected");
+    }
+
+    let locked = node.selected && !node.enabled;
+    button.set_sensitive(node.enabled || locked);
+    if locked {
+        button.set_can_target(false);
+        button.set_can_focus(false);
+    }
+
+    let lua = context.lua.clone();
+    let callback = context.callback.cloned();
+    let output = context.output.cloned();
+    let current_output = context.current_output.clone();
+    let output_key = current_output.borrow().clone();
+    let tx = context.tx.clone();
+    let key = context.key.clone();
+    let id = node.id.clone();
+    let code = node.action.clone();
+    let checked = next_checked(node);
+    let popover = context.root.clone();
+    let close_on_select = context.close_on_select;
+    button.connect_clicked(move |_| {
+        if let Some(callback) = &callback {
+            *current_output.borrow_mut() = output_key.clone();
+            if let Some(output) = &output {
+                let _ = lua.globals().set("output", output.clone());
+            }
+            let item_id = id.clone().unwrap_or(Value::Nil);
+            if let Err(error) = callback.call::<()>((item_id, checked)) {
+                eprintln!("nitroget: menu callback error: {error}");
+            }
+            let _ = tx.try_send(Msg::Render {
+                path: key.0.clone(),
+            });
+        } else if let Some(code) = &code {
+            let _ = tx.try_send(Msg::MenuAction {
+                key: key.clone(),
+                code: code.clone(),
+            });
+        }
+        if close_on_select {
+            popover.popdown();
+        }
+    });
+
+    button
+}
+
+fn build_submenu(node: &MenuNode, context: &MenuContext<'_>) -> gtk::MenuButton {
+    let button = gtk::MenuButton::new();
+    button.add_css_class("menu-item");
+    button.add_css_class("submenu");
+    button.set_sensitive(node.enabled);
+
+    let content = item_content(node);
+    let arrow = gtk::Image::from_icon_name("pan-end-symbolic");
+    arrow.set_pixel_size(12);
+    content.append(&arrow);
+    button.set_child(Some(&content));
+
+    let popover = gtk::Popover::new();
+    popover.add_css_class("nitroget-menu");
+    popover.set_has_arrow(false);
+    let submenu = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    popover.set_child(Some(&submenu));
+    build_menu(&submenu, &node.submenu, context);
+    button.set_popover(Some(&popover));
+
+    button
+}
+
+fn item_content(node: &MenuNode) -> gtk::Box {
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+
+    if let Some(icon) = &node.icon {
+        let image = if icon.starts_with('/') {
+            gtk::Image::from_file(icon)
+        } else {
+            gtk::Image::from_icon_name(icon)
+        };
+        image.set_pixel_size(14);
+        content.append(&image);
+    }
+
+    if let Some(marker) = marker(node) {
+        let label = gtk::Label::new(Some(marker));
+        label.set_width_chars(1);
+        content.append(&label);
+    }
+
+    if !node.label.is_empty() {
+        content.append(&gtk::Label::new(Some(&node.label)));
+    }
+
+    content
+}
+
+fn marker(node: &MenuNode) -> Option<&'static str> {
+    match node.item_type.as_deref() {
+        Some("radio") if node.checked => Some("●"),
+        Some("radio") => Some("○"),
+        Some("check") if node.checked => Some("✓"),
+        Some("check") => Some(""),
+        _ => None,
+    }
+}
+
+fn next_checked(node: &MenuNode) -> bool {
+    matches!(node.item_type.as_deref(), Some("check" | "radio")) && !node.checked
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    static GTK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn gtk_ready() -> bool {
+        let _guard = GTK_LOCK.lock().unwrap();
+        if gtk::is_initialized() {
+            return true;
+        }
+        match gtk::init() {
+            Ok(()) => true,
+            Err(error) => {
+                if std::env::var_os("NITROGET_REQUIRE_GTK").is_some() {
+                    panic!("GTK unavailable: {error}");
+                }
+                false
+            }
+        }
+    }
+
+    fn test_anchor() -> MenuAnchor {
+        let window = gtk::Window::new();
+        let parent = window.clone().upcast::<gtk::Widget>();
+        MenuAnchor {
+            window,
+            parent,
+            key: (PathBuf::from("test.nitroget"), None),
+            x: 0.0,
+            y: 0.0,
+            layer_shell: false,
+        }
+    }
+
+    fn test_context<'a>(
+        lua: &'a Lua,
+        callback: Option<&'a Function>,
+        current_output: &'a Rc<RefCell<Option<String>>>,
+        tx: &'a async_channel::Sender<Msg>,
+        key: &'a WidgetKey,
+        root: &'a gtk::Popover,
+    ) -> MenuContext<'a> {
+        MenuContext {
+            lua,
+            callback,
+            output: None,
+            current_output,
+            tx,
+            key,
+            close_on_select: false,
+            root,
+            layout: MenuLayout::Native,
+        }
+    }
 
     #[test]
     fn parses_menu_nodes() {
@@ -596,65 +514,208 @@ mod tests {
         assert_eq!(nodes[2].submenu.len(), 1);
         assert!(!nodes[2].submenu[0].enabled);
         assert!(nodes[2].submenu[0].checked);
+        assert!(!nodes[2].submenu[0].selected);
     }
 
     #[test]
     fn parses_menu_options_layouts() {
         let lua = Lua::new();
         let table: Table = lua
-            .load("return { layout = \"row\", close_on_select = true, x = 10, y = 20 }")
+            .load("return { layout = \"row\", x = 10, y = 20 }")
             .eval()
             .unwrap();
         let options = parse_menu_options(Some(table)).unwrap();
         assert_eq!(options.layout, MenuLayout::Row);
-        assert!(options.close_on_select);
+        assert!(!options.close_on_select);
         assert_eq!(options.x, Some(10.0));
         assert_eq!(options.y, Some(20.0));
 
-        let table: Table = lua.load("return { layout = \"column\" }").eval().unwrap();
+        let table: Table = lua
+            .load("return { layout = \"column\", close_on_select = true }")
+            .eval()
+            .unwrap();
         let options = parse_menu_options(Some(table)).unwrap();
         assert_eq!(options.layout, MenuLayout::Column);
-        assert!(!options.close_on_select);
+        assert!(options.close_on_select);
 
         let table: Table = lua.load("return { layout = \"grid\" }").eval().unwrap();
         assert!(parse_menu_options(Some(table)).is_err());
     }
 
     #[test]
-    fn builds_menu_tree() {
+    fn native_menus_close_by_default() {
+        let lua = Lua::new();
+        let table: Table = lua.load("return {}").eval().unwrap();
+        let options = parse_menu_options(Some(table)).unwrap();
+        assert_eq!(options.layout, MenuLayout::Native);
+        assert!(options.close_on_select);
+
+        let table: Table = lua
+            .load("return { close_on_select = false }")
+            .eval()
+            .unwrap();
+        let options = parse_menu_options(Some(table)).unwrap();
+        assert!(!options.close_on_select);
+    }
+
+    #[test]
+    fn selected_is_independent_of_checked() {
         let lua = Lua::new();
         let table: Table = lua
             .load(
                 r#"return {
-                    { label = "A", action = "a()" },
+                    { label = "Current", selected = true, enabled = false },
+                    { label = "Checked", type = "check", checked = true },
+                }"#,
+            )
+            .eval()
+            .unwrap();
+        let nodes = parse_menu_nodes(&table).unwrap();
+        assert!(nodes[0].selected);
+        assert!(!nodes[0].checked);
+        assert!(nodes[1].checked);
+        assert!(!nodes[1].selected);
+    }
+
+    #[test]
+    fn toggles_only_check_and_radio_items() {
+        let lua = Lua::new();
+        let table: Table = lua
+            .load(
+                r#"return {
+                    { label = "Plain" },
+                    { label = "Check", type = "check" },
+                    { label = "Checked", type = "check", checked = true },
+                    { label = "Radio", type = "radio" },
+                }"#,
+            )
+            .eval()
+            .unwrap();
+        let nodes = parse_menu_nodes(&table).unwrap();
+        assert!(!next_checked(&nodes[0]));
+        assert!(next_checked(&nodes[1]));
+        assert!(!next_checked(&nodes[2]));
+        assert!(next_checked(&nodes[3]));
+        assert_eq!(marker(&nodes[0]), None);
+        assert_eq!(marker(&nodes[1]), Some(""));
+        assert_eq!(marker(&nodes[2]), Some("✓"));
+        assert_eq!(marker(&nodes[3]), Some("○"));
+    }
+
+    #[test]
+    fn builds_updates_and_invokes_menu() {
+        if !gtk_ready() {
+            return;
+        }
+
+        let lua = Lua::new();
+        let table: Table = lua
+            .load(
+                r#"return {
+                    { label = "One", id = 1 },
                     { separator = true },
-                    { label = "B", checked = true, action = "b()" },
-                    { label = "C", submenu = {
-                        { label = "D", enabled = false, action = "d()" },
+                    { label = "Two", id = 2 },
+                    { label = "More", submenu = {
+                        { label = "Nested", id = 3 },
                     } },
                 }"#,
             )
             .eval()
             .unwrap();
-
         let nodes = parse_menu_nodes(&table).unwrap();
-        let menu = gtk::gio::Menu::new();
-        let group = gtk::gio::SimpleActionGroup::new();
+        let anchor = test_anchor();
         let (tx, _rx) = async_channel::unbounded();
-        let key: WidgetKey = (PathBuf::from("w.nitroget"), None);
         let current_output = Rc::new(RefCell::new(None));
-        let context = MenuContext {
-            group: &group,
-            lua: &lua,
-            callback: None,
-            output: None,
-            current_output: &current_output,
-            tx: &tx,
-            key: &key,
-        };
-        let mut counter = 0;
-        append_menu(&menu, &nodes, &context, &mut counter);
+        let popover = gtk::Popover::new();
+        let container = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        let context = test_context(&lua, None, &current_output, &tx, &anchor.key, &popover);
+        build_menu(&container, &nodes, &context);
 
-        assert_eq!(counter, 3);
+        let mut children = Vec::new();
+        let mut child = container.first_child();
+        while let Some(widget) = child {
+            child = widget.next_sibling();
+            children.push(widget);
+        }
+        assert_eq!(children.len(), 4);
+        assert!(children[1].is::<gtk::Separator>());
+        assert!(children[2].is::<gtk::Button>());
+        assert!(children[3].is::<gtk::MenuButton>());
+
+        let state = MenuState {
+            anchor,
+            options: MenuOptions {
+                x: None,
+                y: None,
+                layout: MenuLayout::Native,
+                close_on_select: true,
+                callback: None,
+            },
+            lua: lua.clone(),
+            output: None,
+            current_output,
+            tx,
+            container: container.clone(),
+            popover: popover.clone(),
+        };
+        OPEN_MENU.with(|slot| *slot.borrow_mut() = Some(state));
+
+        let updated: Table = lua
+            .load(r#"return { { label = "Only", id = 9 } }"#)
+            .eval()
+            .unwrap();
+        update_menu(updated).unwrap();
+
+        assert_eq!(container.first_child().unwrap().next_sibling(), None);
+        assert_eq!(
+            OPEN_MENU.with(|slot| slot.borrow().as_ref().unwrap().popover.clone()),
+            popover
+        );
+
+        close_menu();
+        assert!(OPEN_MENU.with(|slot| slot.borrow().is_none()));
+
+        let lua = Lua::new();
+        let items: Table = lua
+            .load(r#"return { { label = "Seven", id = 7, type = "check" } }"#)
+            .eval()
+            .unwrap();
+        let options: Table = lua
+            .load("return { on_select = function(id, checked) selected_id = id; selected_checked = checked end }")
+            .eval()
+            .unwrap();
+        let parsed = parse_menu_options(Some(options)).unwrap();
+        let nodes = parse_menu_nodes(&items).unwrap();
+        let anchor = test_anchor();
+        let (tx, rx) = async_channel::unbounded();
+        let current_output = Rc::new(RefCell::new(None));
+        let popover = gtk::Popover::new();
+        let container = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        let context = test_context(
+            &lua,
+            parsed.callback.as_ref(),
+            &current_output,
+            &tx,
+            &anchor.key,
+            &popover,
+        );
+        build_menu(&container, &nodes, &context);
+
+        let button = container
+            .first_child()
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap();
+        button.emit_clicked();
+
+        assert!(matches!(
+            lua.globals().get::<Value>("selected_id").unwrap(),
+            Value::Integer(7)
+        ));
+        assert!(lua.globals().get::<bool>("selected_checked").unwrap());
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            Msg::Render { path } if path.as_os_str() == "test.nitroget"
+        ));
     }
 }

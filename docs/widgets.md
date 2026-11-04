@@ -515,9 +515,9 @@ file in the widget folder reloads the widget.
 | `nitroget.json_encode(value)` | convert a Lua value to JSON text |
 | `nitroget.json_decode(text)` | convert JSON text to a Lua value |
 | `nitroget.run(cmd)` | run a shell command and ignore the output |
-| `nitroget.menu(items, options)` | show a native menu |
+| `nitroget.menu(items, options)` | open a menu |
 | `nitroget.close_menu()` | close the currently open menu |
-| `nitroget.update_menu(items)` | replace the items of the open row menu |
+| `nitroget.update_menu(items)` | replace the items of the open menu in place |
 | `nitroget.refresh()` | force an update (timers and handlers do this already) |
 | `nitroget.log(msg)` | print to the terminal |
 | `nitroget.quit()` | stop the daemon |
@@ -559,6 +559,7 @@ nitroget.menu({
 | `enabled` | `false` disables the item |
 | `type` | `check` or `radio` |
 | `checked` | current check/radio state |
+| `selected` | highlights the item as the current choice |
 | `separator` | draws a section separator |
 | `icon` | icon name or absolute file path |
 
@@ -567,18 +568,22 @@ nitroget.menu({
 | `on_select` | callback `(id, checked)` for items with an `id` |
 | `x`, `y` | position relative to the widget root |
 | `layout` | `menu` (default), `row` or `column` |
-| `close_on_select` | close after selection; default `false` for flat layouts |
+| `close_on_select` | close after selection; defaults to `true` for `menu` and `false` for flat layouts |
 
 Numeric ids stay numbers; string ids stay strings.
 
-`layout = "menu"` is the default native popover menu. It supports submenus,
-icons and native checkmarks, and closes automatically after activation.
+`layout = "menu"` is the default vertical menu. It renders submenus,
+separators, icons and check/radio markers, and closes after selection by
+default. Set `close_on_select = false` to keep it open.
 
-`layout = "row"` and `layout = "column"` render flat button lists. They skip
-submenus and separators, stay open after selection by default, and support
-`close_on_select` and `nitroget.update_menu(items)`. `update_menu` rebuilds the
-open flat menu in place without closing it. Call `nitroget.close_menu()` to
-close any open menu from Lua.
+`layout = "row"` and `layout = "column"` render flat button lists. `row` is
+horizontal and skips submenus and separators. `column` is vertical and renders
+separators but skips submenus. Flat layouts stay open after selection by
+default; set `close_on_select = true` to close them.
+
+Every layout supports `nitroget.update_menu(items)`, which replaces the open
+menu's items in place without closing or recreating it, and
+`nitroget.close_menu()`, which closes the open menu from Lua.
 
 ### Shared and per-output state
 
