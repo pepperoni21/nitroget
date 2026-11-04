@@ -527,8 +527,8 @@ file in the widget folder reloads the widget.
 
 `nitroget.menu(items, options)` opens a menu. It can be called from an
 `on:click` handler or from a timer; a click anchors the menu at the click, while
-a timer anchors it at the widget. `x` and `y` override the position. Only one
-menu is open at a time.
+a timer anchors it at the bottom center of the widget. `x` and `y` override the
+position. Only one menu is open at a time.
 
 ```lua
 nitroget.menu({

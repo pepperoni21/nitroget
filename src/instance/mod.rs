@@ -170,7 +170,7 @@ impl Instance {
                 parent,
                 key: self.key.clone(),
                 x: width as f64 / 2.0,
-                y: 0.0,
+                y: height as f64,
                 layer_shell: self.use_layer_shell,
             });
         }
