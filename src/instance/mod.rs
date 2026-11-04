@@ -12,7 +12,7 @@ use mlua::Lua;
 use crate::component::{Component, ComponentKind, PanelEdge, Placement};
 use crate::state::{Msg, WidgetKey};
 
-pub use runtime::{MENU_ANCHOR, MenuAnchor, WidgetRuntime};
+pub use runtime::{DEFAULT_MENU_ANCHOR, MENU_ANCHOR, MenuAnchor, WidgetRuntime};
 
 pub struct Instance {
     pub key: WidgetKey,
@@ -137,6 +137,24 @@ impl Instance {
         self.render_now();
 
         Ok(())
+    }
+
+    pub fn set_default_menu_anchor(&self) {
+        let parent = self
+            .tree
+            .as_ref()
+            .map(|tree| tree.root.clone())
+            .unwrap_or_else(|| self.window.clone().upcast());
+        DEFAULT_MENU_ANCHOR.with(|slot| {
+            *slot.borrow_mut() = Some(MenuAnchor {
+                window: self.window.clone(),
+                parent,
+                key: self.key.clone(),
+                x: self.window.width() as f64 / 2.0,
+                y: 0.0,
+                layer_shell: self.use_layer_shell,
+            });
+        });
     }
 
     pub fn set_output_context(&self) {

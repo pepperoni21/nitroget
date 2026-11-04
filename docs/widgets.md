@@ -181,7 +181,7 @@ statement directly:
 <button on:click="count = count + 1">+1</button>
 ```
 
-Inside `{#each}`, `event.index` is the zero-based row index and `event.button`
+Inside `{#each}`, `event.index` is the one-based row index and `event.button`
 is the pointer button.
 
 ### `box` and `row`
@@ -390,8 +390,9 @@ vertically. `sep` is a horizontal separator line.
 
 `{:else if}` is not supported; nest another `{#if}` instead. Lists can be Lua
 arrays or keyed tables. Rows are updated in place while the number of items is
-unchanged; adding or removing items rebuilds that list. A `{#each}` block follows
-the orientation of its parent `box` or `row`.
+unchanged; adding or removing items rebuilds that list. The loop index is
+one-based. A `{#each}` block follows the orientation of its parent `box` or
+`row`.
 
 ### Expressions and escaping
 
@@ -514,7 +515,7 @@ file in the widget folder reloads the widget.
 | `nitroget.json_encode(value)` | convert a Lua value to JSON text |
 | `nitroget.json_decode(text)` | convert JSON text to a Lua value |
 | `nitroget.run(cmd)` | run a shell command and ignore the output |
-| `nitroget.menu(items)` | show a native menu anchored to the clicked element |
+| `nitroget.menu(items, options)` | show a native menu |
 | `nitroget.refresh()` | force an update (timers and handlers do this already) |
 | `nitroget.log(msg)` | print to the terminal |
 | `nitroget.quit()` | stop the daemon |
@@ -522,30 +523,46 @@ file in the widget folder reloads the widget.
 
 ### Menus
 
-`nitroget.menu(items)` opens a native menu anchored to the element that
-dispatched the current click. It must be called from an `on:click` handler.
+`nitroget.menu(items, options)` opens a native menu. It can be called from an
+`on:click` handler or from a timer; a click anchors the menu at the click, while
+a timer anchors it at the widget. `x` and `y` override the position.
 
 ```lua
 nitroget.menu({
-  { label = "Open", action = "open()" },
+  { id = "open", label = "Open" },
   { separator = true },
-  { label = "Mute", checked = true, action = "toggle_mute()" },
+  { id = "mute", label = "Mute", type = "check", checked = muted },
   { label = "Output", submenu = {
-      { label = "Speakers", action = "use_speakers()" },
-      { label = "Headphones", action = "use_headphones()" },
+      { id = "speakers", label = "Speakers" },
+      { id = "headphones", label = "Headphones" },
   } },
+}, {
+  on_select = function(id, checked)
+    if id == "open" then
+      open()
+    elseif id == "mute" then
+      muted = checked
+    end
+  end,
 })
 ```
 
 | Field | Meaning |
 | --- | --- |
+| `id` | value passed to `on_select` |
 | `label` | menu text |
-| `action` | Lua code run when selected |
+| `action` | Lua code run when selected; alternative to `id` |
 | `submenu` | nested item array |
 | `enabled` | `false` disables the item |
-| `checked` | shows a checkmark |
+| `type` | `check` or `radio` |
+| `checked` | current check/radio state |
 | `separator` | draws a section separator |
 | `icon` | icon name or absolute file path |
+
+| Option | Meaning |
+| --- | --- |
+| `on_select` | callback `(id, checked)` for items with an `id` |
+| `x`, `y` | position relative to the widget root |
 
 ### Shared and per-output state
 

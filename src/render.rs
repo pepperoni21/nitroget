@@ -420,10 +420,10 @@ impl REach {
             for (position, value) in values.into_iter().enumerate() {
                 globals.set(self.item.as_str(), value)?;
                 if let Some(index) = &self.index {
-                    globals.set(index.as_str(), position as i64)?;
+                    globals.set(index.as_str(), position as i64 + 1)?;
                 }
 
-                inst.each_stack.push(position as i64);
+                inst.each_stack.push(position as i64 + 1);
                 let row = build_nodes(inst, &self.body, self.orientation);
                 inst.each_stack.pop();
                 let row = row?;
@@ -451,9 +451,9 @@ impl REach {
         for (position, value) in values.into_iter().enumerate() {
             globals.set(self.item.as_str(), value)?;
             if let Some(index) = &self.index {
-                globals.set(index.as_str(), position as i64)?;
+                globals.set(index.as_str(), position as i64 + 1)?;
             }
-            inst.each_stack.push(position as i64);
+            inst.each_stack.push(position as i64 + 1);
             let result: Result<()> = (|| {
                 for node in &mut self.rows[position] {
                     node.update(inst)?;
@@ -541,9 +541,9 @@ fn build_nodes(
                 for (position, value) in values.into_iter().enumerate() {
                     globals.set(item.as_str(), value)?;
                     if let Some(index) = index {
-                        globals.set(index.as_str(), position as i64)?;
+                        globals.set(index.as_str(), position as i64 + 1)?;
                     }
-                    inst.each_stack.push(position as i64);
+                    inst.each_stack.push(position as i64 + 1);
                     let row = build_nodes(inst, body, orientation);
                     inst.each_stack.pop();
                     let row = row?;
@@ -1199,6 +1199,7 @@ impl Instance {
                 );
             }
             self.tree = Some(tree);
+            self.set_default_menu_anchor();
             self.sync_keyboard_mode();
             return;
         }
@@ -1207,6 +1208,7 @@ impl Instance {
             Ok(tree) => {
                 self.window.set_child(Some(&tree.root));
                 self.tree = Some(tree);
+                self.set_default_menu_anchor();
                 self.sync_keyboard_mode();
             }
             Err(e) => {

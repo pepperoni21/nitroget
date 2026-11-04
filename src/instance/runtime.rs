@@ -34,6 +34,7 @@ pub struct MenuAnchor {
 
 thread_local! {
     pub static MENU_ANCHOR: RefCell<Option<MenuAnchor>> = const { RefCell::new(None) };
+    pub static DEFAULT_MENU_ANCHOR: RefCell<Option<MenuAnchor>> = const { RefCell::new(None) };
     static OPEN_MENU: RefCell<Option<gtk::PopoverMenu>> = const { RefCell::new(None) };
 }
 
@@ -531,14 +532,28 @@ impl WidgetRuntime {
 
         {
             let tx = self.tx.clone();
+            let outputs = self.outputs.clone();
+            let current_output = self.current_output.clone();
             nt.set(
                 "menu",
-                lua.create_function(move |_, items: Table| {
-                    let anchor = MENU_ANCHOR.with(|slot| slot.borrow().clone());
+                lua.create_function(move |lua, (items, options): (Table, Option<Table>)| {
+                    let anchor = MENU_ANCHOR
+                        .with(|slot| slot.borrow().clone())
+                        .or_else(|| DEFAULT_MENU_ANCHOR.with(|slot| slot.borrow().clone()));
                     let Some(anchor) = anchor else {
-                        return Err(mlua::Error::runtime("menu requires a click event"));
+                        return Err(mlua::Error::runtime(
+                            "menu requires a rendered widget or click event",
+                        ));
                     };
-                    show_menu(items, anchor, tx.clone())
+
+                    let options = parse_menu_options(options)?;
+                    let output = current_output.borrow().as_ref().and_then(|key| {
+                        outputs.as_ref().and_then(|table| {
+                            table.get::<Option<Table>>(key.as_str()).ok().flatten()
+                        })
+                    });
+
+                    show_menu(items, anchor, options, lua.clone(), output, tx.clone())
                 })?,
             )?;
         }
@@ -832,13 +847,24 @@ impl Drop for WidgetRuntime {
 }
 
 struct MenuNode {
+    id: Option<String>,
     label: String,
     action: Option<String>,
+    item_type: Option<String>,
     submenu: Vec<MenuNode>,
     enabled: bool,
     checked: bool,
     separator: bool,
     icon: Option<String>,
+}
+
+fn id_value(value: Value) -> Option<String> {
+    match value {
+        Value::String(text) => text.to_str().ok().map(|text| text.to_string()),
+        Value::Integer(number) => Some(number.to_string()),
+        Value::Number(number) => Some(number.to_string()),
+        _ => None,
+    }
 }
 
 fn parse_menu_nodes(items: &Table) -> mlua::Result<Vec<MenuNode>> {
@@ -849,8 +875,10 @@ fn parse_menu_nodes(items: &Table) -> mlua::Result<Vec<MenuNode>> {
         let separator = item.get::<Option<bool>>("separator")?.unwrap_or(false);
         if separator {
             nodes.push(MenuNode {
+                id: None,
                 label: String::new(),
                 action: None,
+                item_type: None,
                 submenu: Vec::new(),
                 enabled: true,
                 checked: false,
@@ -866,8 +894,10 @@ fn parse_menu_nodes(items: &Table) -> mlua::Result<Vec<MenuNode>> {
         };
 
         nodes.push(MenuNode {
+            id: item.get::<Option<Value>>("id")?.and_then(id_value),
             label: item.get::<Option<String>>("label")?.unwrap_or_default(),
             action: item.get::<Option<String>>("action")?,
+            item_type: item.get::<Option<String>>("type")?,
             submenu,
             enabled: item.get::<Option<bool>>("enabled")?.unwrap_or(true),
             checked: item.get::<Option<bool>>("checked")?.unwrap_or(false),
@@ -879,12 +909,41 @@ fn parse_menu_nodes(items: &Table) -> mlua::Result<Vec<MenuNode>> {
     Ok(nodes)
 }
 
+struct MenuOptions {
+    x: Option<f64>,
+    y: Option<f64>,
+    callback: Option<Function>,
+}
+
+fn parse_menu_options(options: Option<Table>) -> mlua::Result<MenuOptions> {
+    let Some(options) = options else {
+        return Ok(MenuOptions {
+            x: None,
+            y: None,
+            callback: None,
+        });
+    };
+
+    Ok(MenuOptions {
+        x: options.get::<Option<f64>>("x")?,
+        y: options.get::<Option<f64>>("y")?,
+        callback: options.get::<Option<Function>>("on_select")?,
+    })
+}
+
+struct MenuContext<'a> {
+    group: &'a gtk::gio::SimpleActionGroup,
+    lua: &'a Lua,
+    callback: Option<&'a Function>,
+    output: Option<&'a Table>,
+    tx: &'a async_channel::Sender<Msg>,
+    key: &'a WidgetKey,
+}
+
 fn append_menu(
     target: &gtk::gio::Menu,
     nodes: &[MenuNode],
-    group: &gtk::gio::SimpleActionGroup,
-    tx: &async_channel::Sender<Msg>,
-    key: &WidgetKey,
+    context: &MenuContext<'_>,
     counter: &mut usize,
 ) {
     let mut section = gtk::gio::Menu::new();
@@ -900,31 +959,56 @@ fn append_menu(
             continue;
         }
 
-        let label = if node.checked {
-            format!("✓ {}", node.label)
-        } else {
-            node.label.clone()
+        let marker = match node.item_type.as_deref() {
+            Some("radio") if node.checked => Some("● "),
+            Some("check") if node.checked => Some("✓ "),
+            _ => None,
+        };
+        let label = match marker {
+            Some(marker) => format!("{marker}{}", node.label),
+            None => node.label.clone(),
         };
 
         let item = if !node.submenu.is_empty() {
             let submenu = gtk::gio::Menu::new();
-            append_menu(&submenu, &node.submenu, group, tx, key, counter);
+            append_menu(&submenu, &node.submenu, context, counter);
             gtk::gio::MenuItem::new_submenu(Some(&label), &submenu)
-        } else if let Some(action) = &node.action {
+        } else if node.id.is_some() || node.action.is_some() {
             let name = format!("item_{}", *counter);
             *counter += 1;
 
             let simple = gtk::gio::SimpleAction::new(&name, None);
-            let tx = tx.clone();
-            let key = key.clone();
-            let action = action.clone();
+            let lua = context.lua.clone();
+            let callback = context.callback.cloned();
+            let output = context.output.cloned();
+            let tx = context.tx.clone();
+            let key = context.key.clone();
+            let id = node.id.clone().unwrap_or_default();
+            let code = node.action.clone();
+            let checked = if matches!(node.item_type.as_deref(), Some("check" | "radio")) {
+                !node.checked
+            } else {
+                false
+            };
             simple.connect_activate(move |_, _| {
-                let _ = tx.try_send(Msg::MenuAction {
-                    key: key.clone(),
-                    code: action.clone(),
-                });
+                if let Some(callback) = &callback {
+                    if let Some(output) = &output {
+                        let _ = lua.globals().set("output", output.clone());
+                    }
+                    if let Err(error) = callback.call::<()>((id.clone(), checked)) {
+                        eprintln!("nitroget: menu callback error: {error}");
+                    }
+                    let _ = tx.try_send(Msg::Render {
+                        path: key.0.clone(),
+                    });
+                } else if let Some(code) = &code {
+                    let _ = tx.try_send(Msg::MenuAction {
+                        key: key.clone(),
+                        code: code.clone(),
+                    });
+                }
             });
-            group.add_action(&simple);
+            context.group.add_action(&simple);
 
             gtk::gio::MenuItem::new(Some(&label), Some(&format!("menu.{name}")))
         } else {
@@ -953,12 +1037,28 @@ fn append_menu(
     }
 }
 
-fn show_menu(items: Table, anchor: MenuAnchor, tx: async_channel::Sender<Msg>) -> mlua::Result<()> {
+fn show_menu(
+    items: Table,
+    anchor: MenuAnchor,
+    options: MenuOptions,
+    lua: Lua,
+    output: Option<Table>,
+    tx: async_channel::Sender<Msg>,
+) -> mlua::Result<()> {
     let nodes = parse_menu_nodes(&items)?;
     let menu = gtk::gio::Menu::new();
     let group = gtk::gio::SimpleActionGroup::new();
     let mut counter = 0usize;
-    append_menu(&menu, &nodes, &group, &tx, &anchor.key, &mut counter);
+    let callback = options.callback;
+    let context = MenuContext {
+        group: &group,
+        lua: &lua,
+        callback: callback.as_ref(),
+        output: output.as_ref(),
+        tx: &tx,
+        key: &anchor.key,
+    };
+    append_menu(&menu, &nodes, &context, &mut counter);
 
     let old = OPEN_MENU.with(|slot| slot.borrow_mut().take());
     if let Some(old) = old {
@@ -971,8 +1071,8 @@ fn show_menu(items: Table, anchor: MenuAnchor, tx: async_channel::Sender<Msg>) -
     popover.set_has_arrow(false);
     popover.set_parent(&anchor.parent);
     popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
-        anchor.x.round() as i32,
-        anchor.y.round() as i32,
+        options.x.unwrap_or(anchor.x).round() as i32,
+        options.y.unwrap_or(anchor.y).round() as i32,
         1,
         1,
     )));
@@ -999,6 +1099,7 @@ fn show_menu(items: Table, anchor: MenuAnchor, tx: async_channel::Sender<Msg>) -
     }
 
     popover.popup();
+    popover.child_focus(gtk::DirectionType::TabForward);
     Ok(())
 }
 
@@ -1156,7 +1257,7 @@ mod tests {
                 r#"return {
                     { label = "A", action = "a()" },
                     { separator = true },
-                    { label = "B", submenu = {
+                    { id = 7, label = "B", type = "check", submenu = {
                         { label = "C", enabled = false, checked = true },
                     } },
                 }"#,
@@ -1170,6 +1271,8 @@ mod tests {
         assert_eq!(nodes[0].action.as_deref(), Some("a()"));
         assert!(nodes[1].separator);
         assert_eq!(nodes[2].label, "B");
+        assert_eq!(nodes[2].id.as_deref(), Some("7"));
+        assert_eq!(nodes[2].item_type.as_deref(), Some("check"));
         assert_eq!(nodes[2].submenu.len(), 1);
         assert!(!nodes[2].submenu[0].enabled);
         assert!(nodes[2].submenu[0].checked);
@@ -1198,7 +1301,15 @@ mod tests {
         let (tx, _rx) = async_channel::unbounded();
         let key: WidgetKey = (PathBuf::from("w.nitroget"), None);
         let mut counter = 0;
-        append_menu(&menu, &nodes, &group, &tx, &key, &mut counter);
+        let context = MenuContext {
+            group: &group,
+            lua: &lua,
+            callback: None,
+            output: None,
+            tx: &tx,
+            key: &key,
+        };
+        append_menu(&menu, &nodes, &context, &mut counter);
 
         assert_eq!(counter, 3);
     }
