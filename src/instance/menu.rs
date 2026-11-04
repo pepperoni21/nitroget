@@ -20,7 +20,14 @@ pub struct MenuAnchor {
 thread_local! {
     pub static MENU_ANCHOR: RefCell<Option<MenuAnchor>> = const { RefCell::new(None) };
     static OPEN_MENU: RefCell<Option<gtk::Popover>> = const { RefCell::new(None) };
-    static ROW_MENU: RefCell<Option<RowMenuState>> = const { RefCell::new(None) };
+    static FLAT_MENU: RefCell<Option<FlatMenuState>> = const { RefCell::new(None) };
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MenuLayout {
+    Native,
+    Row,
+    Column,
 }
 
 struct MenuNode {
@@ -39,7 +46,7 @@ struct MenuNode {
 struct MenuOptions {
     x: Option<f64>,
     y: Option<f64>,
-    layout: Option<String>,
+    layout: MenuLayout,
     close_on_select: bool,
     callback: Option<Function>,
 }
@@ -86,12 +93,23 @@ fn parse_menu_nodes(items: &Table) -> mlua::Result<Vec<MenuNode>> {
     Ok(nodes)
 }
 
+fn parse_layout(value: Option<String>) -> mlua::Result<MenuLayout> {
+    match value.as_deref() {
+        None | Some("" | "menu") => Ok(MenuLayout::Native),
+        Some("row") => Ok(MenuLayout::Row),
+        Some("column") => Ok(MenuLayout::Column),
+        Some(_) => Err(mlua::Error::runtime(
+            "menu layout must be \"menu\", \"row\" or \"column\"",
+        )),
+    }
+}
+
 fn parse_menu_options(options: Option<Table>) -> mlua::Result<MenuOptions> {
     let Some(options) = options else {
         return Ok(MenuOptions {
             x: None,
             y: None,
-            layout: None,
+            layout: MenuLayout::Native,
             close_on_select: false,
             callback: None,
         });
@@ -100,7 +118,7 @@ fn parse_menu_options(options: Option<Table>) -> mlua::Result<MenuOptions> {
     Ok(MenuOptions {
         x: options.get::<Option<f64>>("x")?,
         y: options.get::<Option<f64>>("y")?,
-        layout: options.get::<Option<String>>("layout")?,
+        layout: parse_layout(options.get::<Option<String>>("layout")?)?,
         close_on_select: options
             .get::<Option<bool>>("close_on_select")?
             .unwrap_or(false),
@@ -108,7 +126,7 @@ fn parse_menu_options(options: Option<Table>) -> mlua::Result<MenuOptions> {
     })
 }
 
-struct RowMenuState {
+struct FlatMenuState {
     anchor: MenuAnchor,
     options: MenuOptions,
     lua: Lua,
@@ -243,16 +261,36 @@ pub fn show_menu(
     let nodes = parse_menu_nodes(&items)?;
     let options = parse_menu_options(options)?;
 
-    if options.layout.as_deref() == Some("row") {
-        show_row_menu(nodes, anchor, options, lua, output, current_output, tx)
-    } else {
-        show_vertical_menu(nodes, anchor, options, lua, output, current_output, tx)
+    match options.layout {
+        MenuLayout::Native => {
+            show_vertical_menu(nodes, anchor, options, lua, output, current_output, tx)
+        }
+        MenuLayout::Row => show_flat_menu(FlatMenuRequest {
+            nodes,
+            anchor,
+            options,
+            lua,
+            output,
+            current_output,
+            tx,
+            orientation: gtk::Orientation::Horizontal,
+        }),
+        MenuLayout::Column => show_flat_menu(FlatMenuRequest {
+            nodes,
+            anchor,
+            options,
+            lua,
+            output,
+            current_output,
+            tx,
+            orientation: gtk::Orientation::Vertical,
+        }),
     }
 }
 
 pub fn close_menu() {
     let old = OPEN_MENU.with(|slot| slot.borrow_mut().take());
-    ROW_MENU.with(|slot| *slot.borrow_mut() = None);
+    FLAT_MENU.with(|slot| *slot.borrow_mut() = None);
     if let Some(popover) = old {
         popover.popdown();
     }
@@ -260,12 +298,12 @@ pub fn close_menu() {
 
 pub fn update_menu(items: Table) -> mlua::Result<()> {
     let nodes = parse_menu_nodes(&items)?;
-    ROW_MENU.with(|slot| {
+    FLAT_MENU.with(|slot| {
         let slot = slot.borrow();
         let Some(state) = slot.as_ref() else {
             return Ok(());
         };
-        let context = RowContext {
+        let context = FlatContext {
             lua: &state.lua,
             callback: state.options.callback.as_ref(),
             output: state.output.as_ref(),
@@ -275,7 +313,7 @@ pub fn update_menu(items: Table) -> mlua::Result<()> {
             close_on_select: state.options.close_on_select,
             popover: &state.popover,
         };
-        build_row_menu(&state.row, &nodes, &context);
+        build_flat_menu(&state.row, &nodes, &context);
         Ok(())
     })
 }
@@ -326,7 +364,7 @@ fn show_vertical_menu(
     popover.connect_closed(move |popover| {
         popover.unparent();
         OPEN_MENU.with(|slot| *slot.borrow_mut() = None);
-        ROW_MENU.with(|slot| *slot.borrow_mut() = None);
+        FLAT_MENU.with(|slot| *slot.borrow_mut() = None);
         if layer_shell {
             use gtk4_layer_shell::LayerShell;
             window.set_keyboard_mode(gtk4_layer_shell::KeyboardMode::None);
@@ -347,7 +385,7 @@ fn show_vertical_menu(
     Ok(())
 }
 
-struct RowContext<'a> {
+struct FlatContext<'a> {
     lua: &'a Lua,
     callback: Option<&'a Function>,
     output: Option<&'a Table>,
@@ -358,7 +396,7 @@ struct RowContext<'a> {
     popover: &'a gtk::Popover,
 }
 
-fn build_row_menu(row: &gtk::Box, nodes: &[MenuNode], context: &RowContext<'_>) {
+fn build_flat_menu(row: &gtk::Box, nodes: &[MenuNode], context: &FlatContext<'_>) {
     while let Some(child) = row.first_child() {
         row.remove(&child);
     }
@@ -368,7 +406,21 @@ fn build_row_menu(row: &gtk::Box, nodes: &[MenuNode], context: &RowContext<'_>) 
             continue;
         }
 
-        let button = gtk::Button::with_label(&node.label);
+        let button = gtk::Button::new();
+        let content = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        if let Some(icon) = &node.icon {
+            let image = if icon.starts_with('/') {
+                gtk::Image::from_file(icon)
+            } else {
+                gtk::Image::from_icon_name(icon)
+            };
+            image.set_pixel_size(14);
+            content.append(&image);
+        }
+        if !node.label.is_empty() {
+            content.append(&gtk::Label::new(Some(&node.label)));
+        }
+        button.set_child(Some(&content));
         button.add_css_class("menu-item");
         if node.checked {
             button.add_css_class("selected");
@@ -420,7 +472,7 @@ fn build_row_menu(row: &gtk::Box, nodes: &[MenuNode], context: &RowContext<'_>) 
     }
 }
 
-fn show_row_menu(
+struct FlatMenuRequest {
     nodes: Vec<MenuNode>,
     anchor: MenuAnchor,
     options: MenuOptions,
@@ -428,7 +480,20 @@ fn show_row_menu(
     output: Option<Table>,
     current_output: Rc<RefCell<Option<String>>>,
     tx: async_channel::Sender<Msg>,
-) -> mlua::Result<()> {
+    orientation: gtk::Orientation,
+}
+
+fn show_flat_menu(request: FlatMenuRequest) -> mlua::Result<()> {
+    let FlatMenuRequest {
+        nodes,
+        anchor,
+        options,
+        lua,
+        output,
+        current_output,
+        tx,
+        orientation,
+    } = request;
     let old = OPEN_MENU.with(|slot| slot.borrow_mut().take());
     if let Some(old) = old {
         old.popdown();
@@ -446,10 +511,10 @@ fn show_row_menu(
         1,
     )));
 
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    let row = gtk::Box::new(orientation, 4);
     popover.set_child(Some(&row));
 
-    let context = RowContext {
+    let context = FlatContext {
         lua: &lua,
         callback: options.callback.as_ref(),
         output: output.as_ref(),
@@ -459,14 +524,14 @@ fn show_row_menu(
         close_on_select: options.close_on_select,
         popover: &popover,
     };
-    build_row_menu(&row, &nodes, &context);
+    build_flat_menu(&row, &nodes, &context);
 
     let window = anchor.window.clone();
     let layer_shell = anchor.layer_shell;
     popover.connect_closed(move |popover| {
         popover.unparent();
         OPEN_MENU.with(|slot| *slot.borrow_mut() = None);
-        ROW_MENU.with(|slot| *slot.borrow_mut() = None);
+        FLAT_MENU.with(|slot| *slot.borrow_mut() = None);
         if layer_shell {
             use gtk4_layer_shell::LayerShell;
             window.set_keyboard_mode(gtk4_layer_shell::KeyboardMode::None);
@@ -474,8 +539,8 @@ fn show_row_menu(
     });
 
     OPEN_MENU.with(|slot| *slot.borrow_mut() = Some(popover.clone()));
-    ROW_MENU.with(|slot| {
-        *slot.borrow_mut() = Some(RowMenuState {
+    FLAT_MENU.with(|slot| {
+        *slot.borrow_mut() = Some(FlatMenuState {
             anchor: anchor.clone(),
             options,
             lua,
@@ -531,6 +596,28 @@ mod tests {
         assert_eq!(nodes[2].submenu.len(), 1);
         assert!(!nodes[2].submenu[0].enabled);
         assert!(nodes[2].submenu[0].checked);
+    }
+
+    #[test]
+    fn parses_menu_options_layouts() {
+        let lua = Lua::new();
+        let table: Table = lua
+            .load("return { layout = \"row\", close_on_select = true, x = 10, y = 20 }")
+            .eval()
+            .unwrap();
+        let options = parse_menu_options(Some(table)).unwrap();
+        assert_eq!(options.layout, MenuLayout::Row);
+        assert!(options.close_on_select);
+        assert_eq!(options.x, Some(10.0));
+        assert_eq!(options.y, Some(20.0));
+
+        let table: Table = lua.load("return { layout = \"column\" }").eval().unwrap();
+        let options = parse_menu_options(Some(table)).unwrap();
+        assert_eq!(options.layout, MenuLayout::Column);
+        assert!(!options.close_on_select);
+
+        let table: Table = lua.load("return { layout = \"grid\" }").eval().unwrap();
+        assert!(parse_menu_options(Some(table)).is_err());
     }
 
     #[test]

@@ -565,16 +565,18 @@ nitroget.menu({
 | --- | --- |
 | `on_select` | callback `(id, checked)` for items with an `id` |
 | `x`, `y` | position relative to the widget root |
-| `layout` | `row` renders a horizontal button row; flat items only |
-| `close_on_select` | close after selection; default `false` for row menus |
+| `layout` | `menu` (default), `row` or `column` |
+| `close_on_select` | close after selection; default `false` for flat layouts |
 
 Numeric ids stay numbers; string ids stay strings.
 
-Row menus stay open after selection by default. Set `close_on_select = true`
-to close them, or call `nitroget.close_menu()` from Lua. Call
-`nitroget.update_menu(items)` to rebuild the open row menu, for example to move
-the selected item after a change. Native vertical menus close automatically when
-an item is activated.
+`layout = "menu"` is the default native popover menu. It supports submenus,
+icons and native checkmarks, and closes automatically after activation.
+
+`layout = "row"` and `layout = "column"` render flat button lists. They skip
+submenus and separators, stay open after selection by default, and support
+`close_on_select` and `nitroget.update_menu(items)`. Call
+`nitroget.close_menu()` to close any open menu from Lua.
 
 ### Shared and per-output state
 
