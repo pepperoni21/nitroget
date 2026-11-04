@@ -555,6 +555,16 @@ nitroget.menu({
 })
 ```
 
+For a slider popup:
+
+```lua
+nitroget.menu({
+  { type = "label", label = "Brightness" },
+  { separator = true },
+  { type = "slider", min = 1, max = 100, step = 1, value = brightness, show_value = false, action = "set_brightness(event.value)" },
+}, { y = 50 })
+```
+
 | Field | Meaning |
 | --- | --- |
 | `id` | value passed to `on_select`; keeps its Lua type |
@@ -562,8 +572,10 @@ nitroget.menu({
 | `action` | Lua code run when selected; alternative to `id` |
 | `submenu` | nested item array |
 | `enabled` | `false` disables the item |
-| `type` | `check` or `radio` |
+| `type` | `check`, `radio`, `slider` or `label` |
 | `checked` | current check/radio state |
+| `value`, `min`, `max`, `step` | slider value and bounds |
+| `show_value` | show the slider value; default `true` |
 | `selected` | highlights the item as the current choice |
 | `separator` | draws a section separator |
 | `icon` | icon name or absolute file path |
@@ -579,6 +591,12 @@ nitroget.menu({
 Numeric ids stay numbers; string ids stay strings. Use `selected = true` for
 the current choice and `enabled = false` to keep it visible but non-interactive.
 `checked` only controls check and radio markers.
+
+`type = "slider"` renders a horizontal scale. Set `min`, `max`, `step` and
+`value`; `show_value = false` hides the numeric readout. Its `action` runs while
+dragging with `event.value` available.
+
+`type = "label"` renders a non-interactive heading.
 
 `layout = "menu"` is vertical and supports submenus, separators, icons, and
 check/radio markers. `layout = "row"` and `layout = "column"` are flat button
