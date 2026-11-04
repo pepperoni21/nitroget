@@ -264,6 +264,9 @@ impl WidgetRuntime {
         self.outputs = None;
         self.error = None;
         *self.current_output.borrow_mut() = None;
+        *self.menu_anchor.borrow_mut() = None;
+        self.menu_anchors.borrow_mut().clear();
+        *self.click_output.borrow_mut() = None;
         self.paused = true;
     }
 
@@ -276,6 +279,9 @@ impl WidgetRuntime {
         self.outputs = None;
         self.error = None;
         *self.current_output.borrow_mut() = None;
+        *self.menu_anchor.borrow_mut() = None;
+        self.menu_anchors.borrow_mut().clear();
+        *self.click_output.borrow_mut() = None;
         self.paused = false;
 
         self.register_lua(&comp.lua_dirs)?;
@@ -1063,5 +1069,10 @@ mod tests {
         assert_eq!(runtime.click_output.borrow().as_deref(), Some("HDMI-A-1"));
         let clicked: bool = runtime.lua.load("return clicked").eval().unwrap();
         assert!(clicked);
+
+        runtime.pause();
+        assert!(runtime.click_output.borrow().is_none());
+        assert!(runtime.menu_anchors.borrow().is_empty());
+        assert!(runtime.menu_anchor.borrow().is_none());
     }
 }
