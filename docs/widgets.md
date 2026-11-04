@@ -567,6 +567,7 @@ nitroget.menu({
 | --- | --- |
 | `on_select` | callback `(id, checked)` for items with an `id` |
 | `x`, `y` | position relative to the widget root |
+| `output` | connector to anchor the menu on; useful when a widget spans outputs |
 | `layout` | `menu` (default), `row` or `column` |
 | `close_on_select` | close after selection; defaults to `true` for `menu` and `false` for flat layouts |
 
