@@ -128,8 +128,8 @@ fn append_menu(
         }
 
         let marker = match node.item_type.as_deref() {
-            Some("radio") if node.checked => Some("● "),
-            Some("check") if node.checked => Some("✓ "),
+            Some("radio") => Some(if node.checked { "● " } else { "○ " }),
+            Some("check") => Some(if node.checked { "✓ " } else { "  " }),
             _ => None,
         };
         let label = match marker {
