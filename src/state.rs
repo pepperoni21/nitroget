@@ -10,7 +10,7 @@ use async_channel::Sender;
 use gtk::prelude::*;
 
 use crate::component::Placement as ComponentPlacement;
-use crate::instance::{Instance, WidgetRuntime};
+use crate::instance::{Instance, MENU_ANCHOR, MenuAnchor, WidgetRuntime};
 use crate::placement::Placement;
 use crate::reconcile;
 
@@ -57,6 +57,14 @@ pub enum Msg {
     Sync,
     /// A pointer/signal event with Lua code to run.
     Click {
+        key: WidgetKey,
+        code: String,
+        index: Option<i64>,
+        button: u32,
+        x: f64,
+        y: f64,
+    },
+    MenuAction {
         key: WidgetKey,
         code: String,
     },
@@ -178,7 +186,15 @@ impl AppState {
     pub fn handle(&mut self, msg: Msg) {
         match msg {
             Msg::Sync => self.sync(),
-            Msg::Click { key, code } => self.run(&key, &code, None),
+            Msg::Click {
+                key,
+                code,
+                index,
+                button,
+                x,
+                y,
+            } => self.run_click(&key, &code, index, button, x, y),
+            Msg::MenuAction { key, code } => self.run(&key, &code, None),
             Msg::Change { key, code, value } => self.run(&key, &code, Some(value)),
             Msg::Text { key, code, value } => self.run_text(&key, &code, &value),
             Msg::Render { path } => self.render_path(&path),
@@ -224,6 +240,63 @@ impl AppState {
             &self.app,
             &self.tx,
         );
+    }
+
+    fn run_click(
+        &mut self,
+        key: &WidgetKey,
+        code: &str,
+        index: Option<i64>,
+        button: u32,
+        x: f64,
+        y: f64,
+    ) {
+        let data = self
+            .widgets
+            .get(key)
+            .filter(|running| running.state == WidgetState::Active)
+            .map(|running| {
+                (
+                    running.instance.runtime.clone(),
+                    running.instance.window.clone(),
+                    running
+                        .instance
+                        .comp
+                        .placement
+                        .connector
+                        .clone()
+                        .unwrap_or_default(),
+                    running.instance.window.width(),
+                    running.instance.window.height(),
+                    running.instance.use_layer_shell,
+                    running
+                        .instance
+                        .tree
+                        .as_ref()
+                        .map(|tree| tree.root.clone())
+                        .unwrap_or_else(|| running.instance.window.clone().upcast()),
+                )
+            });
+        let Some((runtime, window, connector, width, height, layer_shell, parent)) = data else {
+            return;
+        };
+
+        if let Ok(mut runtime) = runtime.try_borrow_mut() {
+            let _ = runtime.set_output_context(&connector, key.1, width, height);
+            MENU_ANCHOR.with(|slot| {
+                *slot.borrow_mut() = Some(MenuAnchor {
+                    window: window.clone(),
+                    parent,
+                    key: key.clone(),
+                    x,
+                    y,
+                    layer_shell,
+                });
+            });
+            runtime.run_click(code, index, button);
+            MENU_ANCHOR.with(|slot| *slot.borrow_mut() = None);
+        }
+        self.render_path(&key.0);
     }
 
     fn run(&mut self, key: &WidgetKey, code: &str, event: Option<f64>) {

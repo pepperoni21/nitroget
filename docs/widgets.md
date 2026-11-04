@@ -181,6 +181,9 @@ statement directly:
 <button on:click="count = count + 1">+1</button>
 ```
 
+Inside `{#each}`, `event.index` is the one-based row index and `event.button`
+is the pointer button.
+
 ### `box` and `row`
 
 Vertical and horizontal containers. `gap` is the spacing in pixels.
@@ -387,7 +390,9 @@ vertically. `sep` is a horizontal separator line.
 
 `{:else if}` is not supported; nest another `{#if}` instead. Lists can be Lua
 arrays or keyed tables. Rows are updated in place while the number of items is
-unchanged; adding or removing items rebuilds that list.
+unchanged; adding or removing items rebuilds that list. The loop index is
+one-based. A `{#each}` block follows the orientation of its parent `box` or
+`row`.
 
 ### Expressions and escaping
 
@@ -510,10 +515,77 @@ file in the widget folder reloads the widget.
 | `nitroget.json_encode(value)` | convert a Lua value to JSON text |
 | `nitroget.json_decode(text)` | convert JSON text to a Lua value |
 | `nitroget.run(cmd)` | run a shell command and ignore the output |
+| `nitroget.menu(items, options)` | open a menu |
+| `nitroget.close_menu()` | close the currently open menu |
+| `nitroget.update_menu(items)` | replace the items of the open menu |
 | `nitroget.refresh()` | force an update (timers and handlers do this already) |
 | `nitroget.log(msg)` | print to the terminal |
 | `nitroget.quit()` | stop the daemon |
 | `nitroget.version` | engine version string |
+
+### Menus
+
+`nitroget.menu(items, options)` opens a menu. It can be called from an
+`on:click` handler or from a timer; a click anchors the menu at the click, while
+a timer anchors it at the bottom center of the widget. `x` and `y` override the
+position. Only one menu is open at a time.
+
+```lua
+nitroget.menu({
+  { id = "open", label = "Open" },
+  { separator = true },
+  { id = "mute", label = "Mute", type = "check", checked = muted },
+  { label = "Output", submenu = {
+      { id = "speakers", label = "Speakers" },
+      { id = "headphones", label = "Headphones" },
+  } },
+}, {
+  on_select = function(id, checked)
+    if id == "open" then
+      open()
+    elseif id == "mute" then
+      muted = checked
+    end
+  end,
+})
+```
+
+| Field | Meaning |
+| --- | --- |
+| `id` | value passed to `on_select`; keeps its Lua type |
+| `label` | menu text |
+| `action` | Lua code run when selected; alternative to `id` |
+| `submenu` | nested item array |
+| `enabled` | `false` disables the item |
+| `type` | `check` or `radio` |
+| `checked` | current check/radio state |
+| `selected` | highlights the item as the current choice |
+| `separator` | draws a section separator |
+| `icon` | icon name or absolute file path |
+
+| Option | Meaning |
+| --- | --- |
+| `on_select` | callback `(id, checked)` for items with an `id` |
+| `x`, `y` | position relative to the widget root |
+| `output` | connector to anchor the menu on; useful when a widget spans outputs |
+| `layout` | `menu` (default), `row` or `column` |
+| `close_on_select` | close after selection; defaults to `true` for `menu` and `false` for flat layouts |
+
+Numeric ids stay numbers; string ids stay strings. Use `selected = true` for
+the current choice and `enabled = false` to keep it visible but non-interactive.
+`checked` only controls check and radio markers.
+
+`layout = "menu"` is vertical and supports submenus, separators, icons, and
+check/radio markers. `layout = "row"` and `layout = "column"` are flat button
+lists; `row` is horizontal, `column` is vertical. Flat layouts do not render
+submenus, and `row` does not render separators.
+
+`close_on_select` defaults to `true` for `menu` and `false` for `row` and
+`column`.
+
+`nitroget.update_menu(items)` replaces the items of the open menu.
+`nitroget.close_menu()` closes it. On a multi-output widget, `output` selects
+the output used by a timer-opened menu.
 
 ### Shared and per-output state
 

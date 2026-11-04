@@ -361,6 +361,7 @@ pub struct RIf {
     children: Vec<RNode>,
     then_body: Vec<Node>,
     else_body: Vec<Node>,
+    orientation: gtk::Orientation,
 }
 
 impl RIf {
@@ -382,7 +383,7 @@ impl RIf {
         } else {
             &self.else_body
         };
-        self.children = build_nodes(inst, body)?;
+        self.children = build_nodes(inst, body, self.orientation)?;
         append_nodes(&self.container, &self.children);
         sync_expand(&self.container, &self.children);
         self.branch = Some(cond);
@@ -398,6 +399,7 @@ pub struct REach {
     index: Option<String>,
     body: Vec<Node>,
     rows: Vec<Vec<RNode>>,
+    orientation: gtk::Orientation,
 }
 
 impl REach {
@@ -418,10 +420,13 @@ impl REach {
             for (position, value) in values.into_iter().enumerate() {
                 globals.set(self.item.as_str(), value)?;
                 if let Some(index) = &self.index {
-                    globals.set(index.as_str(), position as i64)?;
+                    globals.set(index.as_str(), position as i64 + 1)?;
                 }
 
-                let row = build_nodes(inst, &self.body)?;
+                inst.each_stack.push(position as i64 + 1);
+                let row = build_nodes(inst, &self.body, self.orientation);
+                inst.each_stack.pop();
+                let row = row?;
                 append_nodes(&self.container, &row);
                 self.rows.push(row);
             }
@@ -446,11 +451,17 @@ impl REach {
         for (position, value) in values.into_iter().enumerate() {
             globals.set(self.item.as_str(), value)?;
             if let Some(index) = &self.index {
-                globals.set(index.as_str(), position as i64)?;
+                globals.set(index.as_str(), position as i64 + 1)?;
             }
-            for node in &mut self.rows[position] {
-                node.update(inst)?;
-            }
+            inst.each_stack.push(position as i64 + 1);
+            let result: Result<()> = (|| {
+                for node in &mut self.rows[position] {
+                    node.update(inst)?;
+                }
+                Ok(())
+            })();
+            inst.each_stack.pop();
+            result?;
         }
 
         globals.set(self.item.as_str(), old_item)?;
@@ -462,7 +473,11 @@ impl REach {
     }
 }
 
-fn build_nodes(inst: &mut Instance, nodes: &[Node]) -> Result<Vec<RNode>> {
+fn build_nodes(
+    inst: &mut Instance,
+    nodes: &[Node],
+    orientation: gtk::Orientation,
+) -> Result<Vec<RNode>> {
     let mut out = Vec::with_capacity(nodes.len());
 
     for node in nodes {
@@ -488,10 +503,10 @@ fn build_nodes(inst: &mut Instance, nodes: &[Node]) -> Result<Vec<RNode>> {
                 then_body,
                 else_body,
             } => {
-                let container = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                let container = gtk::Box::new(orientation, 0);
                 let branch = inst.eval_bool(cond)?;
                 let body = if branch { then_body } else { else_body };
-                let children = build_nodes(inst, body)?;
+                let children = build_nodes(inst, body, orientation)?;
                 append_nodes(&container, &children);
                 sync_expand(&container, &children);
 
@@ -502,6 +517,7 @@ fn build_nodes(inst: &mut Instance, nodes: &[Node]) -> Result<Vec<RNode>> {
                     children,
                     then_body: then_body.clone(),
                     else_body: else_body.clone(),
+                    orientation,
                 }));
             }
 
@@ -511,7 +527,7 @@ fn build_nodes(inst: &mut Instance, nodes: &[Node]) -> Result<Vec<RNode>> {
                 index,
                 body,
             } => {
-                let container = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                let container = gtk::Box::new(orientation, 0);
                 let values = eval_list(inst, list)?;
 
                 let globals = inst.lua.globals();
@@ -525,9 +541,12 @@ fn build_nodes(inst: &mut Instance, nodes: &[Node]) -> Result<Vec<RNode>> {
                 for (position, value) in values.into_iter().enumerate() {
                     globals.set(item.as_str(), value)?;
                     if let Some(index) = index {
-                        globals.set(index.as_str(), position as i64)?;
+                        globals.set(index.as_str(), position as i64 + 1)?;
                     }
-                    let row = build_nodes(inst, body)?;
+                    inst.each_stack.push(position as i64 + 1);
+                    let row = build_nodes(inst, body, orientation);
+                    inst.each_stack.pop();
+                    let row = row?;
                     append_nodes(&container, &row);
                     rows.push(row);
                 }
@@ -547,6 +566,7 @@ fn build_nodes(inst: &mut Instance, nodes: &[Node]) -> Result<Vec<RNode>> {
                     index: index.clone(),
                     body: body.clone(),
                     rows,
+                    orientation,
                 }));
             }
         }
@@ -572,7 +592,7 @@ fn build_element(inst: &mut Instance, element: &TplElement) -> Result<RNode> {
             };
 
             let container = gtk::Box::new(orientation, spacing);
-            let children = build_nodes(inst, &element.children)?;
+            let children = build_nodes(inst, &element.children, orientation)?;
             append_nodes(&container, &children);
             sync_expand(&container, &children);
 
@@ -596,7 +616,7 @@ fn build_element(inst: &mut Instance, element: &TplElement) -> Result<RNode> {
             grid.set_column_spacing(spacing.max(0) as u32);
             grid.set_row_spacing(spacing.max(0) as u32);
 
-            let children = build_nodes(inst, &element.children)?;
+            let children = build_nodes(inst, &element.children, gtk::Orientation::Vertical)?;
             for (index, node) in children.iter().enumerate() {
                 let column = (index % columns) as i32;
                 let row = (index / columns) as i32;
@@ -743,7 +763,8 @@ fn build_element(inst: &mut Instance, element: &TplElement) -> Result<RNode> {
                     )
                 }
                 None => {
-                    let children = build_nodes(inst, &element.children)?;
+                    let children =
+                        build_nodes(inst, &element.children, gtk::Orientation::Horizontal)?;
                     if children.len() == 1 {
                         for widget in children[0].widgets() {
                             button.set_child(Some(&widget));
@@ -916,7 +937,7 @@ fn build_element(inst: &mut Instance, element: &TplElement) -> Result<RNode> {
                 scrolled.set_max_content_height((max_height as i32).max(1));
             }
 
-            let children = build_nodes(inst, &element.children)?;
+            let children = build_nodes(inst, &element.children, gtk::Orientation::Vertical)?;
             if children.len() == 1 {
                 let widgets = children[0].widgets();
                 if widgets.len() == 1 {
@@ -1075,22 +1096,82 @@ fn apply_common(
     if let Some(code) = element.attr("on:click").map(str::to_string) {
         let tx = inst.tx.clone();
         let key = inst.key.clone();
+        let index = inst.each_stack.last().copied();
+
         if let Ok(button) = widget.clone().downcast::<gtk::Button>() {
-            button.connect_clicked(move |_| {
-                let _ = tx.try_send(Msg::Click {
-                    key: key.clone(),
-                    code: code.clone(),
+            {
+                let tx = tx.clone();
+                let key = key.clone();
+                let code = code.clone();
+                let widget = widget.clone();
+                button.connect_clicked(move |_| {
+                    let (x, y) = widget_center(&widget);
+                    let _ = tx.try_send(Msg::Click {
+                        key: key.clone(),
+                        code: code.clone(),
+                        index,
+                        button: 1,
+                        x,
+                        y,
+                    });
                 });
-            });
-        } else {
+            }
+
+            let tx = tx.clone();
+            let key = key.clone();
+            let code = code.clone();
+            let widget = widget.clone();
             let gesture = gtk::GestureClick::new();
-            gesture.connect_pressed(move |_, _, _, _| {
+            gesture.set_button(3);
+            gesture.connect_released(move |gesture, _, x, y| {
+                let (x, y) = window_point(&widget, x, y);
                 let _ = tx.try_send(Msg::Click {
                     key: key.clone(),
                     code: code.clone(),
+                    index,
+                    button: gesture.current_button(),
+                    x,
+                    y,
                 });
             });
-            widget.add_controller(gesture);
+            button.add_controller(gesture);
+        } else {
+            let clicked = widget.clone();
+            let primary = gtk::GestureClick::new();
+            primary.set_button(1);
+            primary.connect_pressed({
+                let tx = tx.clone();
+                let key = key.clone();
+                let code = code.clone();
+                move |gesture, _, x, y| {
+                    let (x, y) = window_point(&clicked, x, y);
+                    let _ = tx.try_send(Msg::Click {
+                        key: key.clone(),
+                        code: code.clone(),
+                        index,
+                        button: gesture.current_button(),
+                        x,
+                        y,
+                    });
+                }
+            });
+            widget.add_controller(primary);
+
+            let clicked = widget.clone();
+            let secondary = gtk::GestureClick::new();
+            secondary.set_button(3);
+            secondary.connect_released(move |gesture, _, x, y| {
+                let (x, y) = window_point(&clicked, x, y);
+                let _ = tx.try_send(Msg::Click {
+                    key: key.clone(),
+                    code: code.clone(),
+                    index,
+                    button: gesture.current_button(),
+                    x,
+                    y,
+                });
+            });
+            widget.add_controller(secondary);
         }
     }
 
@@ -1108,6 +1189,7 @@ impl Instance {
         }
 
         self.set_output_context();
+        self.each_stack.clear();
 
         if let Some(mut tree) = self.tree.take() {
             if let Err(e) = tree.update(self) {
@@ -1151,7 +1233,7 @@ impl Instance {
         root.add_css_class(&scope);
 
         let template = self.comp.template.clone();
-        let nodes = build_nodes(self, &template)?;
+        let nodes = build_nodes(self, &template, gtk::Orientation::Vertical)?;
         for node in &nodes {
             for widget in node.widgets() {
                 root.append(&widget);
@@ -1382,4 +1464,29 @@ fn expand_tilde(path: &str) -> String {
         return format!("{home}/{rest}");
     }
     path.to_string()
+}
+
+fn window_point(widget: &gtk::Widget, x: f64, y: f64) -> (f64, f64) {
+    let Some(root) = widget.root() else {
+        return (x, y);
+    };
+    widget
+        .compute_point(&root, &gtk::graphene::Point::new(x as f32, y as f32))
+        .map(|point| (point.x() as f64, point.y() as f64))
+        .unwrap_or((x, y))
+}
+
+fn widget_center(widget: &gtk::Widget) -> (f64, f64) {
+    let Some(root) = widget.root() else {
+        return (0.0, 0.0);
+    };
+    widget
+        .compute_bounds(&root)
+        .map(|bounds| {
+            (
+                (bounds.x() + bounds.width() / 2.0) as f64,
+                (bounds.y() + bounds.height() / 2.0) as f64,
+            )
+        })
+        .unwrap_or((0.0, 0.0))
 }

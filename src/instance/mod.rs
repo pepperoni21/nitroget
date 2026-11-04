@@ -1,3 +1,4 @@
+mod menu;
 mod runtime;
 mod view;
 
@@ -12,6 +13,7 @@ use mlua::Lua;
 use crate::component::{Component, ComponentKind, PanelEdge, Placement};
 use crate::state::{Msg, WidgetKey};
 
+pub use menu::{MENU_ANCHOR, MenuAnchor};
 pub use runtime::WidgetRuntime;
 
 pub struct Instance {
@@ -30,6 +32,7 @@ pub struct Instance {
     pub provider: Option<gtk::CssProvider>,
     pub use_layer_shell: bool,
     pub keyboard_active: bool,
+    pub each_stack: Vec<i64>,
     pub tx: async_channel::Sender<Msg>,
 }
 
@@ -69,6 +72,7 @@ impl Instance {
             provider: None,
             use_layer_shell,
             keyboard_active: false,
+            each_stack: Vec::new(),
             tx,
         };
 
@@ -112,10 +116,10 @@ impl Instance {
         self.tree = None;
         self.textures.clear();
 
-        let previous = std::mem::replace(&mut self.comp, comp);
+        self.comp = comp;
         apply_placement(
             &self.window,
-            Some(&previous.placement),
+            None,
             &self.comp.placement,
             &self.comp.kind,
             self.use_layer_shell,
@@ -151,10 +155,24 @@ impl Instance {
             .height
             .unwrap_or_else(|| self.window.height());
 
-        if let Ok(mut runtime) = self.runtime.try_borrow_mut()
-            && let Err(e) = runtime.set_output_context(&connector, index, width, height)
-        {
-            eprintln!("nitroget: cannot set output context: {e}");
+        let parent = self
+            .tree
+            .as_ref()
+            .map(|tree| tree.root.clone())
+            .unwrap_or_else(|| self.window.clone().upcast());
+
+        if let Ok(mut runtime) = self.runtime.try_borrow_mut() {
+            if let Err(e) = runtime.set_output_context(&connector, index, width, height) {
+                eprintln!("nitroget: cannot set output context: {e}");
+            }
+            runtime.set_menu_anchor(MenuAnchor {
+                window: self.window.clone(),
+                parent,
+                key: self.key.clone(),
+                x: width as f64 / 2.0,
+                y: height as f64,
+                layer_shell: self.use_layer_shell,
+            });
         }
     }
 

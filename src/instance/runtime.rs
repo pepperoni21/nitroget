@@ -17,6 +17,8 @@ use mlua::{Function, Lua, LuaSerdeExt, Table, Value};
 use crate::component::Component;
 use crate::state::{Msg, TimerScope};
 
+use super::menu::{MENU_ANCHOR, MenuAnchor, close_menu, show_menu, update_menu};
+
 const CALLBACKS: &str = "nitroget.callbacks";
 const STREAM_CALLBACKS: &str = "nitroget.stream_callbacks";
 
@@ -209,6 +211,9 @@ pub struct WidgetRuntime {
     pub stream_contexts: Rc<RefCell<HashMap<u64, Option<String>>>>,
     pub current_output: Rc<RefCell<Option<String>>>,
     pub outputs: Option<Table>,
+    pub menu_anchor: Rc<RefCell<Option<MenuAnchor>>>,
+    pub menu_anchors: Rc<RefCell<HashMap<String, MenuAnchor>>>,
+    pub click_output: Rc<RefCell<Option<String>>>,
     pub tx: async_channel::Sender<Msg>,
     pub error: Option<String>,
     pub mtime: SystemTime,
@@ -231,6 +236,9 @@ impl WidgetRuntime {
             stream_contexts: Rc::new(RefCell::new(HashMap::new())),
             current_output: Rc::new(RefCell::new(None)),
             outputs: None,
+            menu_anchor: Rc::new(RefCell::new(None)),
+            menu_anchors: Rc::new(RefCell::new(HashMap::new())),
+            click_output: Rc::new(RefCell::new(None)),
             tx,
             error: None,
             mtime,
@@ -256,6 +264,9 @@ impl WidgetRuntime {
         self.outputs = None;
         self.error = None;
         *self.current_output.borrow_mut() = None;
+        *self.menu_anchor.borrow_mut() = None;
+        self.menu_anchors.borrow_mut().clear();
+        *self.click_output.borrow_mut() = None;
         self.paused = true;
     }
 
@@ -268,6 +279,9 @@ impl WidgetRuntime {
         self.outputs = None;
         self.error = None;
         *self.current_output.borrow_mut() = None;
+        *self.menu_anchor.borrow_mut() = None;
+        self.menu_anchors.borrow_mut().clear();
+        *self.click_output.borrow_mut() = None;
         self.paused = false;
 
         self.register_lua(&comp.lua_dirs)?;
@@ -512,6 +526,86 @@ impl WidgetRuntime {
             })?,
         )?;
 
+        {
+            let tx = self.tx.clone();
+            let outputs = self.outputs.clone();
+            let current_output = self.current_output.clone();
+            let menu_anchor = self.menu_anchor.clone();
+            let menu_anchors = self.menu_anchors.clone();
+            let click_output = self.click_output.clone();
+            nt.set(
+                "menu",
+                lua.create_function(move |lua, (items, options): (Table, Option<Table>)| {
+                    let output_hint = match options.as_ref() {
+                        Some(table) => table
+                            .get::<Option<String>>("output")?
+                            .filter(|name| !name.is_empty()),
+                        None => None,
+                    };
+                    let output_key = output_hint
+                        .clone()
+                        .or_else(|| current_output.borrow().clone())
+                        .or_else(|| click_output.borrow().clone());
+                    let anchor = if let Some(hint) = &output_hint {
+                        Some(menu_anchors.borrow().get(hint).cloned().ok_or_else(|| {
+                            mlua::Error::runtime(format!("no menu anchor for output {hint}"))
+                        })?)
+                    } else {
+                        MENU_ANCHOR
+                            .with(|slot| slot.borrow().clone())
+                            .or_else(|| {
+                                output_key
+                                    .as_ref()
+                                    .and_then(|key| menu_anchors.borrow().get(key).cloned())
+                            })
+                            .or_else(|| {
+                                let anchors = menu_anchors.borrow();
+                                anchors
+                                    .keys()
+                                    .min()
+                                    .and_then(|key| anchors.get(key))
+                                    .cloned()
+                            })
+                            .or_else(|| menu_anchor.borrow().clone())
+                    };
+                    let Some(anchor) = anchor else {
+                        return Err(mlua::Error::runtime(
+                            "menu requires a rendered widget or click event",
+                        ));
+                    };
+
+                    let output = current_output.borrow().as_ref().and_then(|key| {
+                        outputs.as_ref().and_then(|table| {
+                            table.get::<Option<Table>>(key.as_str()).ok().flatten()
+                        })
+                    });
+
+                    show_menu(
+                        items,
+                        anchor,
+                        options,
+                        lua.clone(),
+                        output,
+                        current_output.clone(),
+                        tx.clone(),
+                    )
+                })?,
+            )?;
+        }
+
+        nt.set(
+            "close_menu",
+            lua.create_function(|_, ()| {
+                close_menu();
+                Ok(())
+            })?,
+        )?;
+
+        nt.set(
+            "update_menu",
+            lua.create_function(|_, items: Table| update_menu(items))?,
+        )?;
+
         nt.set(
             "log",
             lua.create_function(|_, msg: String| {
@@ -536,6 +630,12 @@ impl WidgetRuntime {
         lua.globals().set("nitroget", nt)?;
 
         Ok(())
+    }
+
+    pub fn set_menu_anchor(&mut self, anchor: MenuAnchor) {
+        let key = self.current_output.borrow().clone().unwrap_or_default();
+        self.menu_anchors.borrow_mut().insert(key, anchor.clone());
+        *self.menu_anchor.borrow_mut() = Some(anchor);
     }
 
     pub fn set_output_context(
@@ -593,6 +693,19 @@ impl WidgetRuntime {
         }
 
         Ok(())
+    }
+
+    pub fn run_click(&mut self, code: &str, index: Option<i64>, button: u32) {
+        *self.click_output.borrow_mut() = self.current_output.borrow().clone();
+        if let Ok(event) = self.lua.create_table() {
+            let _ = event.set("index", index);
+            let _ = event.set("button", button);
+            let _ = self.lua.globals().set("event", event);
+        }
+
+        if let Err(e) = self.lua.load(code).set_name(code).exec() {
+            eprintln!("nitroget: script error in `{code}`: {e}");
+        }
     }
 
     pub fn run_code(&mut self, code: &str, event: Option<f64>) {
@@ -932,5 +1045,34 @@ mod tests {
         runtime.clear_output_context().unwrap();
         let cleared: bool = runtime.lua.load("return output == nil").eval().unwrap();
         assert!(cleared);
+    }
+
+    #[test]
+    fn click_output_survives_a_global_timer_context() {
+        let comp = crate::component::parse(
+            "<widget name=\"w\"><label>x</label></widget>",
+            Path::new("w.nitroget"),
+        )
+        .unwrap();
+        let (tx, _rx) = async_channel::unbounded();
+        let mut runtime =
+            WidgetRuntime::new(comp, PathBuf::from("w.nitroget"), SystemTime::now(), tx).unwrap();
+
+        runtime
+            .set_output_context("HDMI-A-1", Some(1), 1920, 1080)
+            .unwrap();
+        runtime.run_click("clicked = true", None, 1);
+        assert_eq!(runtime.click_output.borrow().as_deref(), Some("HDMI-A-1"));
+
+        runtime.clear_output_context().unwrap();
+        assert!(runtime.current_output.borrow().is_none());
+        assert_eq!(runtime.click_output.borrow().as_deref(), Some("HDMI-A-1"));
+        let clicked: bool = runtime.lua.load("return clicked").eval().unwrap();
+        assert!(clicked);
+
+        runtime.pause();
+        assert!(runtime.click_output.borrow().is_none());
+        assert!(runtime.menu_anchors.borrow().is_empty());
+        assert!(runtime.menu_anchor.borrow().is_none());
     }
 }
