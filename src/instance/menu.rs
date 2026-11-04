@@ -373,7 +373,12 @@ fn build_row_menu(row: &gtk::Box, nodes: &[MenuNode], context: &RowContext<'_>) 
         if node.checked {
             button.add_css_class("selected");
         }
-        button.set_sensitive(node.enabled);
+        let locked = node.checked && !node.enabled;
+        button.set_sensitive(node.enabled || locked);
+        if locked {
+            button.set_can_target(false);
+            button.set_can_focus(false);
+        }
 
         let lua = context.lua.clone();
         let callback = context.callback.cloned();
