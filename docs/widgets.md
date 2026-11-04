@@ -563,6 +563,7 @@ nitroget.menu({
 | --- | --- |
 | `on_select` | callback `(id, checked)` for items with an `id` |
 | `x`, `y` | position relative to the widget root |
+| `layout` | `row` renders a horizontal button row; flat items only |
 
 Numeric ids stay numbers; string ids stay strings.
 

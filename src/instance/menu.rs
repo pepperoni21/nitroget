@@ -19,7 +19,7 @@ pub struct MenuAnchor {
 
 thread_local! {
     pub static MENU_ANCHOR: RefCell<Option<MenuAnchor>> = const { RefCell::new(None) };
-    static OPEN_MENU: RefCell<Option<gtk::PopoverMenu>> = const { RefCell::new(None) };
+    static OPEN_MENU: RefCell<Option<gtk::Popover>> = const { RefCell::new(None) };
 }
 
 struct MenuNode {
@@ -37,6 +37,7 @@ struct MenuNode {
 struct MenuOptions {
     x: Option<f64>,
     y: Option<f64>,
+    layout: Option<String>,
     callback: Option<Function>,
 }
 
@@ -87,6 +88,7 @@ fn parse_menu_options(options: Option<Table>) -> mlua::Result<MenuOptions> {
         return Ok(MenuOptions {
             x: None,
             y: None,
+            layout: None,
             callback: None,
         });
     };
@@ -94,6 +96,7 @@ fn parse_menu_options(options: Option<Table>) -> mlua::Result<MenuOptions> {
     Ok(MenuOptions {
         x: options.get::<Option<f64>>("x")?,
         y: options.get::<Option<f64>>("y")?,
+        layout: options.get::<Option<String>>("layout")?,
         callback: options.get::<Option<Function>>("on_select")?,
     })
 }
@@ -221,6 +224,23 @@ pub fn show_menu(
 ) -> mlua::Result<()> {
     let nodes = parse_menu_nodes(&items)?;
     let options = parse_menu_options(options)?;
+
+    if options.layout.as_deref() == Some("row") {
+        show_row_menu(nodes, anchor, options, lua, output, current_output, tx)
+    } else {
+        show_vertical_menu(nodes, anchor, options, lua, output, current_output, tx)
+    }
+}
+
+fn show_vertical_menu(
+    nodes: Vec<MenuNode>,
+    anchor: MenuAnchor,
+    options: MenuOptions,
+    lua: Lua,
+    output: Option<Table>,
+    current_output: Rc<RefCell<Option<String>>>,
+    tx: async_channel::Sender<Msg>,
+) -> mlua::Result<()> {
     let menu = gtk::gio::Menu::new();
     let group = gtk::gio::SimpleActionGroup::new();
     let mut counter = 0usize;
@@ -252,6 +272,108 @@ pub fn show_menu(
         1,
     )));
     popover.insert_action_group("menu", Some(&group));
+
+    let window = anchor.window.clone();
+    let layer_shell = anchor.layer_shell;
+    popover.connect_closed(move |popover| {
+        popover.unparent();
+        OPEN_MENU.with(|slot| *slot.borrow_mut() = None);
+        if layer_shell {
+            use gtk4_layer_shell::LayerShell;
+            window.set_keyboard_mode(gtk4_layer_shell::KeyboardMode::None);
+        }
+    });
+
+    OPEN_MENU.with(|slot| *slot.borrow_mut() = Some(popover.clone().upcast()));
+
+    if layer_shell {
+        use gtk4_layer_shell::LayerShell;
+        anchor
+            .window
+            .set_keyboard_mode(gtk4_layer_shell::KeyboardMode::OnDemand);
+    }
+
+    popover.popup();
+    popover.child_focus(gtk::DirectionType::TabForward);
+    Ok(())
+}
+
+fn show_row_menu(
+    nodes: Vec<MenuNode>,
+    anchor: MenuAnchor,
+    options: MenuOptions,
+    lua: Lua,
+    output: Option<Table>,
+    current_output: Rc<RefCell<Option<String>>>,
+    tx: async_channel::Sender<Msg>,
+) -> mlua::Result<()> {
+    let old = OPEN_MENU.with(|slot| slot.borrow_mut().take());
+    if let Some(old) = old {
+        old.popdown();
+        old.unparent();
+    }
+
+    let popover = gtk::Popover::new();
+    popover.add_css_class("nitroget-menu");
+    popover.set_has_arrow(false);
+    popover.set_parent(&anchor.parent);
+    popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
+        options.x.unwrap_or(anchor.x).round() as i32,
+        options.y.unwrap_or(anchor.y).round() as i32,
+        1,
+        1,
+    )));
+
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    for node in &nodes {
+        if node.separator || !node.submenu.is_empty() {
+            continue;
+        }
+
+        let button = gtk::Button::with_label(&node.label);
+        button.add_css_class("menu-item");
+        if node.checked {
+            button.add_css_class("selected");
+        }
+        button.set_sensitive(node.enabled);
+
+        let lua = lua.clone();
+        let callback = options.callback.clone();
+        let output = output.clone();
+        let current_output = current_output.clone();
+        let output_key = current_output.borrow().clone();
+        let tx = tx.clone();
+        let key = anchor.key.clone();
+        let id = node.id.clone();
+        let code = node.action.clone();
+        let checked = !node.checked;
+        let popover_for_click = popover.clone();
+        button.connect_clicked(move |_| {
+            if let Some(callback) = &callback {
+                *current_output.borrow_mut() = output_key.clone();
+                if let Some(output) = &output {
+                    let _ = lua.globals().set("output", output.clone());
+                }
+                let item_id = id.clone().unwrap_or(Value::Nil);
+                if let Err(error) = callback.call::<()>((item_id, checked)) {
+                    eprintln!("nitroget: menu callback error: {error}");
+                }
+                let _ = tx.try_send(Msg::Render {
+                    path: key.0.clone(),
+                });
+            } else if let Some(code) = &code {
+                let _ = tx.try_send(Msg::MenuAction {
+                    key: key.clone(),
+                    code: code.clone(),
+                });
+            }
+            popover_for_click.popdown();
+        });
+
+        row.append(&button);
+    }
+
+    popover.set_child(Some(&row));
 
     let window = anchor.window.clone();
     let layer_shell = anchor.layer_shell;
