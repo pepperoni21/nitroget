@@ -60,6 +60,11 @@ struct MenuNode {
     selected: bool,
     separator: bool,
     icon: Option<String>,
+    value: Option<f64>,
+    min: Option<f64>,
+    max: Option<f64>,
+    step: Option<f64>,
+    show_value: Option<bool>,
 }
 
 #[derive(Clone)]
@@ -89,6 +94,11 @@ fn parse_menu_nodes(items: &Table) -> mlua::Result<Vec<MenuNode>> {
                 selected: false,
                 separator: true,
                 icon: None,
+                value: None,
+                min: None,
+                max: None,
+                step: None,
+                show_value: None,
             });
             continue;
         }
@@ -109,6 +119,11 @@ fn parse_menu_nodes(items: &Table) -> mlua::Result<Vec<MenuNode>> {
             selected: item.get::<Option<bool>>("selected")?.unwrap_or(false),
             separator: false,
             icon: item.get::<Option<String>>("icon")?,
+            value: item.get::<Option<f64>>("value")?,
+            min: item.get::<Option<f64>>("min")?,
+            max: item.get::<Option<f64>>("max")?,
+            step: item.get::<Option<f64>>("step")?,
+            show_value: item.get::<Option<bool>>("show_value")?,
         });
     }
 
@@ -331,7 +346,18 @@ fn clear_menu(container: &gtk::Box) {
     }
 }
 
-fn build_item(node: &MenuNode, context: &MenuContext<'_>) -> gtk::Button {
+fn build_item(node: &MenuNode, context: &MenuContext<'_>) -> gtk::Widget {
+    match node.item_type.as_deref() {
+        Some("slider") => return build_slider(node, context),
+        Some("label") => {
+            let label = gtk::Label::new(Some(&node.label));
+            label.add_css_class("menu-label");
+            label.set_halign(gtk::Align::Center);
+            return label.upcast();
+        }
+        _ => {}
+    }
+
     let button = gtk::Button::new();
     button.set_child(Some(&item_content(node)));
     button.add_css_class("menu-item");
@@ -382,7 +408,42 @@ fn build_item(node: &MenuNode, context: &MenuContext<'_>) -> gtk::Button {
         }
     });
 
-    button
+    button.upcast()
+}
+
+fn build_slider(node: &MenuNode, context: &MenuContext<'_>) -> gtk::Widget {
+    let row = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    row.add_css_class("menu-slider");
+    row.set_halign(gtk::Align::Center);
+
+    let min = node.min.unwrap_or(0.0);
+    let max = node.max.unwrap_or(100.0).max(min + 1.0);
+    let step = node.step.unwrap_or(1.0).max(f64::EPSILON);
+    let value = node.value.unwrap_or(min).clamp(min, max);
+    let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, min, max, step);
+    scale.set_value(value);
+    scale.set_draw_value(node.show_value.unwrap_or(true));
+    scale.set_digits(if step.fract() == 0.0 { 0 } else { 1 });
+    scale.set_hexpand(true);
+    scale.set_halign(gtk::Align::Center);
+    scale.set_size_request(140, -1);
+    scale.set_sensitive(node.enabled);
+
+    if let Some(code) = &node.action {
+        let tx = context.tx.clone();
+        let key = context.key.clone();
+        let code = code.clone();
+        scale.connect_value_changed(move |scale| {
+            let _ = tx.try_send(Msg::Change {
+                key: key.clone(),
+                code: code.clone(),
+                value: scale.value(),
+            });
+        });
+    }
+
+    row.append(&scale);
+    row.upcast()
 }
 
 fn build_submenu(node: &MenuNode, context: &MenuContext<'_>) -> gtk::MenuButton {
@@ -621,6 +682,30 @@ mod tests {
     }
 
     #[test]
+    fn parses_slider_items() {
+        let lua = Lua::new();
+        let table: Table = lua
+            .load(
+                r#"return {
+                    { label = "Brightness", type = "slider", value = 40, min = 1, max = 100, step = 1, show_value = false, action = "set_brightness(event.value)" },
+                }"#,
+            )
+            .eval()
+            .unwrap();
+        let nodes = parse_menu_nodes(&table).unwrap();
+        assert_eq!(nodes[0].item_type.as_deref(), Some("slider"));
+        assert_eq!(nodes[0].value, Some(40.0));
+        assert_eq!(nodes[0].min, Some(1.0));
+        assert_eq!(nodes[0].max, Some(100.0));
+        assert_eq!(nodes[0].step, Some(1.0));
+        assert_eq!(nodes[0].show_value, Some(false));
+        assert_eq!(
+            nodes[0].action.as_deref(),
+            Some("set_brightness(event.value)")
+        );
+    }
+
+    #[test]
     fn builds_updates_and_invokes_menu() {
         if !gtk_ready() {
             return;
@@ -633,6 +718,7 @@ mod tests {
                     { label = "One", id = 1 },
                     { separator = true },
                     { label = "Two", id = 2 },
+                    { label = "Brightness", type = "slider", value = 40, min = 1, max = 100, step = 1, show_value = false, action = "set_brightness(event.value)" },
                     { label = "More", submenu = {
                         { label = "Nested", id = 3 },
                     } },
@@ -642,7 +728,7 @@ mod tests {
             .unwrap();
         let nodes = parse_menu_nodes(&table).unwrap();
         let anchor = test_anchor();
-        let (tx, _rx) = async_channel::unbounded();
+        let (tx, rx) = async_channel::unbounded();
         let current_output = Rc::new(RefCell::new(None));
         let popover = gtk::Popover::new();
         let container = gtk::Box::new(gtk::Orientation::Vertical, 2);
@@ -655,10 +741,27 @@ mod tests {
             child = widget.next_sibling();
             children.push(widget);
         }
-        assert_eq!(children.len(), 4);
+        assert_eq!(children.len(), 5);
         assert!(children[1].is::<gtk::Separator>());
         assert!(children[2].is::<gtk::Button>());
-        assert!(children[3].is::<gtk::MenuButton>());
+        assert!(children[3].is::<gtk::Box>());
+        assert!(children[4].is::<gtk::MenuButton>());
+
+        let slider = children[3]
+            .last_child()
+            .unwrap()
+            .downcast::<gtk::Scale>()
+            .unwrap();
+        assert_eq!(slider.value(), 40.0);
+        assert_eq!(slider.adjustment().lower(), 1.0);
+        assert_eq!(slider.adjustment().upper(), 100.0);
+        assert!(!slider.draws_value());
+        slider.set_value(55.0);
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            Msg::Change { code, value, .. }
+                if code == "set_brightness(event.value)" && value == 55.0
+        ));
 
         let state = MenuState {
             anchor,
