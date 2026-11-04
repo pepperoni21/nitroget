@@ -146,6 +146,7 @@ fn append_menu(
             *counter += 1;
 
             let simple = gtk::gio::SimpleAction::new(&name, None);
+            simple.set_enabled(node.enabled);
             let lua = context.lua.clone();
             let callback = context.callback.cloned();
             let output = context.output.cloned();
