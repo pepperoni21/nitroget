@@ -570,7 +570,9 @@ nitroget.menu({
 | `layout` | `menu` (default), `row` or `column` |
 | `close_on_select` | close after selection; defaults to `true` for `menu` and `false` for flat layouts |
 
-Numeric ids stay numbers; string ids stay strings.
+Numeric ids stay numbers; string ids stay strings. Use `selected = true` for
+the current choice and `enabled = false` to keep it visible but non-interactive.
+`checked` only controls check and radio markers.
 
 `layout = "menu"` is the default vertical menu. It renders submenus,
 separators, icons and check/radio markers, and closes after selection by
