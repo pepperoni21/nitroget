@@ -269,9 +269,15 @@ impl AppState {
                     running.instance.window.width(),
                     running.instance.window.height(),
                     running.instance.use_layer_shell,
+                    running
+                        .instance
+                        .tree
+                        .as_ref()
+                        .map(|tree| tree.root.clone())
+                        .unwrap_or_else(|| running.instance.window.clone().upcast()),
                 )
             });
-        let Some((runtime, window, connector, width, height, layer_shell)) = data else {
+        let Some((runtime, window, connector, width, height, layer_shell, parent)) = data else {
             return;
         };
 
@@ -280,6 +286,7 @@ impl AppState {
             MENU_ANCHOR.with(|slot| {
                 *slot.borrow_mut() = Some(MenuAnchor {
                     window: window.clone(),
+                    parent,
                     key: key.clone(),
                     x,
                     y,

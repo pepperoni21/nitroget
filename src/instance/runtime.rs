@@ -25,6 +25,7 @@ const STREAM_CALLBACKS: &str = "nitroget.stream_callbacks";
 #[derive(Clone)]
 pub struct MenuAnchor {
     pub window: gtk::Window,
+    pub parent: gtk::Widget,
     pub key: WidgetKey,
     pub x: f64,
     pub y: f64,
@@ -966,7 +967,8 @@ fn show_menu(items: Table, anchor: MenuAnchor, tx: async_channel::Sender<Msg>) -
     }
 
     let popover = gtk::PopoverMenu::from_model(Some(&menu));
-    popover.set_parent(&anchor.window);
+    popover.add_css_class("nitroget-menu");
+    popover.set_parent(&anchor.parent);
     popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
         anchor.x.round() as i32,
         anchor.y.round() as i32,
