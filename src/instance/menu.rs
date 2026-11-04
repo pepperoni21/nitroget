@@ -115,6 +115,8 @@ struct RowMenuState {
     output: Option<Table>,
     current_output: Rc<RefCell<Option<String>>>,
     tx: async_channel::Sender<Msg>,
+    row: gtk::Box,
+    popover: gtk::Popover,
 }
 
 struct MenuContext<'a> {
@@ -258,20 +260,24 @@ pub fn close_menu() {
 
 pub fn update_menu(items: Table) -> mlua::Result<()> {
     let nodes = parse_menu_nodes(&items)?;
-    let state = ROW_MENU.with(|slot| slot.borrow_mut().take());
-    let Some(state) = state else {
-        return Ok(());
-    };
-
-    show_row_menu(
-        nodes,
-        state.anchor,
-        state.options,
-        state.lua,
-        state.output,
-        state.current_output,
-        state.tx,
-    )
+    ROW_MENU.with(|slot| {
+        let slot = slot.borrow();
+        let Some(state) = slot.as_ref() else {
+            return Ok(());
+        };
+        let context = RowContext {
+            lua: &state.lua,
+            callback: state.options.callback.as_ref(),
+            output: state.output.as_ref(),
+            current_output: &state.current_output,
+            tx: &state.tx,
+            key: &state.anchor.key,
+            close_on_select: state.options.close_on_select,
+            popover: &state.popover,
+        };
+        build_row_menu(&state.row, &nodes, &context);
+        Ok(())
+    })
 }
 
 fn show_vertical_menu(
@@ -341,44 +347,23 @@ fn show_vertical_menu(
     Ok(())
 }
 
-fn show_row_menu(
-    nodes: Vec<MenuNode>,
-    anchor: MenuAnchor,
-    options: MenuOptions,
-    lua: Lua,
-    output: Option<Table>,
-    current_output: Rc<RefCell<Option<String>>>,
-    tx: async_channel::Sender<Msg>,
-) -> mlua::Result<()> {
-    let old = OPEN_MENU.with(|slot| slot.borrow_mut().take());
-    if let Some(old) = old {
-        old.popdown();
-        old.unparent();
+struct RowContext<'a> {
+    lua: &'a Lua,
+    callback: Option<&'a Function>,
+    output: Option<&'a Table>,
+    current_output: &'a Rc<RefCell<Option<String>>>,
+    tx: &'a async_channel::Sender<Msg>,
+    key: &'a WidgetKey,
+    close_on_select: bool,
+    popover: &'a gtk::Popover,
+}
+
+fn build_row_menu(row: &gtk::Box, nodes: &[MenuNode], context: &RowContext<'_>) {
+    while let Some(child) = row.first_child() {
+        row.remove(&child);
     }
 
-    let state = RowMenuState {
-        anchor: anchor.clone(),
-        options: options.clone(),
-        lua: lua.clone(),
-        output: output.clone(),
-        current_output: current_output.clone(),
-        tx: tx.clone(),
-    };
-
-    let popover = gtk::Popover::new();
-    popover.add_css_class("nitroget-menu");
-    popover.set_has_arrow(false);
-    popover.set_parent(&anchor.parent);
-    popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
-        options.x.unwrap_or(anchor.x).round() as i32,
-        options.y.unwrap_or(anchor.y).round() as i32,
-        1,
-        1,
-    )));
-
-    let close_on_select = options.close_on_select;
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-    for node in &nodes {
+    for node in nodes {
         if node.separator || !node.submenu.is_empty() {
             continue;
         }
@@ -390,17 +375,18 @@ fn show_row_menu(
         }
         button.set_sensitive(node.enabled);
 
-        let lua = lua.clone();
-        let callback = options.callback.clone();
-        let output = output.clone();
-        let current_output = current_output.clone();
+        let lua = context.lua.clone();
+        let callback = context.callback.cloned();
+        let output = context.output.cloned();
+        let current_output = context.current_output.clone();
         let output_key = current_output.borrow().clone();
-        let tx = tx.clone();
-        let key = anchor.key.clone();
+        let tx = context.tx.clone();
+        let key = context.key.clone();
         let id = node.id.clone();
         let code = node.action.clone();
         let checked = !node.checked;
-        let popover_for_click = popover.clone();
+        let popover = context.popover.clone();
+        let close_on_select = context.close_on_select;
         button.connect_clicked(move |_| {
             if let Some(callback) = &callback {
                 *current_output.borrow_mut() = output_key.clone();
@@ -421,14 +407,54 @@ fn show_row_menu(
                 });
             }
             if close_on_select {
-                popover_for_click.popdown();
+                popover.popdown();
             }
         });
 
         row.append(&button);
     }
+}
 
+fn show_row_menu(
+    nodes: Vec<MenuNode>,
+    anchor: MenuAnchor,
+    options: MenuOptions,
+    lua: Lua,
+    output: Option<Table>,
+    current_output: Rc<RefCell<Option<String>>>,
+    tx: async_channel::Sender<Msg>,
+) -> mlua::Result<()> {
+    let old = OPEN_MENU.with(|slot| slot.borrow_mut().take());
+    if let Some(old) = old {
+        old.popdown();
+        old.unparent();
+    }
+
+    let popover = gtk::Popover::new();
+    popover.add_css_class("nitroget-menu");
+    popover.set_has_arrow(false);
+    popover.set_parent(&anchor.parent);
+    popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
+        options.x.unwrap_or(anchor.x).round() as i32,
+        options.y.unwrap_or(anchor.y).round() as i32,
+        1,
+        1,
+    )));
+
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     popover.set_child(Some(&row));
+
+    let context = RowContext {
+        lua: &lua,
+        callback: options.callback.as_ref(),
+        output: output.as_ref(),
+        current_output: &current_output,
+        tx: &tx,
+        key: &anchor.key,
+        close_on_select: options.close_on_select,
+        popover: &popover,
+    };
+    build_row_menu(&row, &nodes, &context);
 
     let window = anchor.window.clone();
     let layer_shell = anchor.layer_shell;
@@ -443,7 +469,18 @@ fn show_row_menu(
     });
 
     OPEN_MENU.with(|slot| *slot.borrow_mut() = Some(popover.clone()));
-    ROW_MENU.with(|slot| *slot.borrow_mut() = Some(state));
+    ROW_MENU.with(|slot| {
+        *slot.borrow_mut() = Some(RowMenuState {
+            anchor: anchor.clone(),
+            options,
+            lua,
+            output,
+            current_output,
+            tx,
+            row,
+            popover: popover.clone(),
+        });
+    });
 
     if layer_shell {
         use gtk4_layer_shell::LayerShell;
