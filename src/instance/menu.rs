@@ -187,6 +187,7 @@ pub fn show_menu(
 
     let old = OPEN_MENU.with(|slot| slot.borrow_mut().take());
     if let Some(old) = old {
+        clear_menu(&old.container);
         old.popover.popdown();
         old.popover.unparent();
     }
@@ -262,6 +263,7 @@ pub fn show_menu(
 pub fn close_menu() {
     let old = OPEN_MENU.with(|slot| slot.borrow_mut().take());
     if let Some(state) = old {
+        clear_menu(&state.container);
         state.popover.popdown();
     }
 }
