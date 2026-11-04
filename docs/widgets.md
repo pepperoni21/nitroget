@@ -516,6 +516,7 @@ file in the widget folder reloads the widget.
 | `nitroget.json_decode(text)` | convert JSON text to a Lua value |
 | `nitroget.run(cmd)` | run a shell command and ignore the output |
 | `nitroget.menu(items, options)` | show a native menu |
+| `nitroget.close_menu()` | close the currently open menu |
 | `nitroget.refresh()` | force an update (timers and handlers do this already) |
 | `nitroget.log(msg)` | print to the terminal |
 | `nitroget.quit()` | stop the daemon |
@@ -564,8 +565,13 @@ nitroget.menu({
 | `on_select` | callback `(id, checked)` for items with an `id` |
 | `x`, `y` | position relative to the widget root |
 | `layout` | `row` renders a horizontal button row; flat items only |
+| `close_on_select` | close after selection; default `false` for row menus |
 
 Numeric ids stay numbers; string ids stay strings.
+
+Row menus stay open after selection by default. Set `close_on_select = true`
+to close them, or call `nitroget.close_menu()` from Lua. Native vertical menus
+close automatically when an item is activated.
 
 ### Shared and per-output state
 

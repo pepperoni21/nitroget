@@ -38,6 +38,7 @@ struct MenuOptions {
     x: Option<f64>,
     y: Option<f64>,
     layout: Option<String>,
+    close_on_select: bool,
     callback: Option<Function>,
 }
 
@@ -89,6 +90,7 @@ fn parse_menu_options(options: Option<Table>) -> mlua::Result<MenuOptions> {
             x: None,
             y: None,
             layout: None,
+            close_on_select: false,
             callback: None,
         });
     };
@@ -97,6 +99,9 @@ fn parse_menu_options(options: Option<Table>) -> mlua::Result<MenuOptions> {
         x: options.get::<Option<f64>>("x")?,
         y: options.get::<Option<f64>>("y")?,
         layout: options.get::<Option<String>>("layout")?,
+        close_on_select: options
+            .get::<Option<bool>>("close_on_select")?
+            .unwrap_or(false),
         callback: options.get::<Option<Function>>("on_select")?,
     })
 }
@@ -232,6 +237,13 @@ pub fn show_menu(
     }
 }
 
+pub fn close_menu() {
+    let old = OPEN_MENU.with(|slot| slot.borrow_mut().take());
+    if let Some(popover) = old {
+        popover.popdown();
+    }
+}
+
 fn show_vertical_menu(
     nodes: Vec<MenuNode>,
     anchor: MenuAnchor,
@@ -324,6 +336,7 @@ fn show_row_menu(
         1,
     )));
 
+    let close_on_select = options.close_on_select;
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     for node in &nodes {
         if node.separator || !node.submenu.is_empty() {
@@ -367,7 +380,9 @@ fn show_row_menu(
                     code: code.clone(),
                 });
             }
-            popover_for_click.popdown();
+            if close_on_select {
+                popover_for_click.popdown();
+            }
         });
 
         row.append(&button);
