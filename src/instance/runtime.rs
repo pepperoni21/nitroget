@@ -17,7 +17,7 @@ use mlua::{Function, Lua, LuaSerdeExt, Table, Value};
 use crate::component::Component;
 use crate::state::{Msg, TimerScope};
 
-use super::menu::{MENU_ANCHOR, MenuAnchor, close_menu, show_menu};
+use super::menu::{MENU_ANCHOR, MenuAnchor, close_menu, show_menu, update_menu};
 
 const CALLBACKS: &str = "nitroget.callbacks";
 const STREAM_CALLBACKS: &str = "nitroget.stream_callbacks";
@@ -558,6 +558,11 @@ impl WidgetRuntime {
                 close_menu();
                 Ok(())
             })?,
+        )?;
+
+        nt.set(
+            "update_menu",
+            lua.create_function(|_, items: Table| update_menu(items))?,
         )?;
 
         nt.set(

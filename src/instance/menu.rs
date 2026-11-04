@@ -20,6 +20,7 @@ pub struct MenuAnchor {
 thread_local! {
     pub static MENU_ANCHOR: RefCell<Option<MenuAnchor>> = const { RefCell::new(None) };
     static OPEN_MENU: RefCell<Option<gtk::Popover>> = const { RefCell::new(None) };
+    static ROW_MENU: RefCell<Option<RowMenuState>> = const { RefCell::new(None) };
 }
 
 struct MenuNode {
@@ -34,6 +35,7 @@ struct MenuNode {
     icon: Option<String>,
 }
 
+#[derive(Clone)]
 struct MenuOptions {
     x: Option<f64>,
     y: Option<f64>,
@@ -104,6 +106,15 @@ fn parse_menu_options(options: Option<Table>) -> mlua::Result<MenuOptions> {
             .unwrap_or(false),
         callback: options.get::<Option<Function>>("on_select")?,
     })
+}
+
+struct RowMenuState {
+    anchor: MenuAnchor,
+    options: MenuOptions,
+    lua: Lua,
+    output: Option<Table>,
+    current_output: Rc<RefCell<Option<String>>>,
+    tx: async_channel::Sender<Msg>,
 }
 
 struct MenuContext<'a> {
@@ -239,9 +250,28 @@ pub fn show_menu(
 
 pub fn close_menu() {
     let old = OPEN_MENU.with(|slot| slot.borrow_mut().take());
+    ROW_MENU.with(|slot| *slot.borrow_mut() = None);
     if let Some(popover) = old {
         popover.popdown();
     }
+}
+
+pub fn update_menu(items: Table) -> mlua::Result<()> {
+    let nodes = parse_menu_nodes(&items)?;
+    let state = ROW_MENU.with(|slot| slot.borrow_mut().take());
+    let Some(state) = state else {
+        return Ok(());
+    };
+
+    show_row_menu(
+        nodes,
+        state.anchor,
+        state.options,
+        state.lua,
+        state.output,
+        state.current_output,
+        state.tx,
+    )
 }
 
 fn show_vertical_menu(
@@ -290,6 +320,7 @@ fn show_vertical_menu(
     popover.connect_closed(move |popover| {
         popover.unparent();
         OPEN_MENU.with(|slot| *slot.borrow_mut() = None);
+        ROW_MENU.with(|slot| *slot.borrow_mut() = None);
         if layer_shell {
             use gtk4_layer_shell::LayerShell;
             window.set_keyboard_mode(gtk4_layer_shell::KeyboardMode::None);
@@ -324,6 +355,15 @@ fn show_row_menu(
         old.popdown();
         old.unparent();
     }
+
+    let state = RowMenuState {
+        anchor: anchor.clone(),
+        options: options.clone(),
+        lua: lua.clone(),
+        output: output.clone(),
+        current_output: current_output.clone(),
+        tx: tx.clone(),
+    };
 
     let popover = gtk::Popover::new();
     popover.add_css_class("nitroget-menu");
@@ -395,6 +435,7 @@ fn show_row_menu(
     popover.connect_closed(move |popover| {
         popover.unparent();
         OPEN_MENU.with(|slot| *slot.borrow_mut() = None);
+        ROW_MENU.with(|slot| *slot.borrow_mut() = None);
         if layer_shell {
             use gtk4_layer_shell::LayerShell;
             window.set_keyboard_mode(gtk4_layer_shell::KeyboardMode::None);
@@ -402,6 +443,7 @@ fn show_row_menu(
     });
 
     OPEN_MENU.with(|slot| *slot.borrow_mut() = Some(popover.clone()));
+    ROW_MENU.with(|slot| *slot.borrow_mut() = Some(state));
 
     if layer_shell {
         use gtk4_layer_shell::LayerShell;

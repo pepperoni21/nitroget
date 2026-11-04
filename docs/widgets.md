@@ -517,6 +517,7 @@ file in the widget folder reloads the widget.
 | `nitroget.run(cmd)` | run a shell command and ignore the output |
 | `nitroget.menu(items, options)` | show a native menu |
 | `nitroget.close_menu()` | close the currently open menu |
+| `nitroget.update_menu(items)` | replace the items of the open row menu |
 | `nitroget.refresh()` | force an update (timers and handlers do this already) |
 | `nitroget.log(msg)` | print to the terminal |
 | `nitroget.quit()` | stop the daemon |
@@ -570,8 +571,10 @@ nitroget.menu({
 Numeric ids stay numbers; string ids stay strings.
 
 Row menus stay open after selection by default. Set `close_on_select = true`
-to close them, or call `nitroget.close_menu()` from Lua. Native vertical menus
-close automatically when an item is activated.
+to close them, or call `nitroget.close_menu()` from Lua. Call
+`nitroget.update_menu(items)` to rebuild the open row menu, for example to move
+the selected item after a change. Native vertical menus close automatically when
+an item is activated.
 
 ### Shared and per-output state
 
