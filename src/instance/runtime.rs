@@ -212,6 +212,7 @@ pub struct WidgetRuntime {
     pub current_output: Rc<RefCell<Option<String>>>,
     pub outputs: Option<Table>,
     pub menu_anchor: Rc<RefCell<Option<MenuAnchor>>>,
+    pub menu_anchors: Rc<RefCell<HashMap<String, MenuAnchor>>>,
     pub tx: async_channel::Sender<Msg>,
     pub error: Option<String>,
     pub mtime: SystemTime,
@@ -235,6 +236,7 @@ impl WidgetRuntime {
             current_output: Rc::new(RefCell::new(None)),
             outputs: None,
             menu_anchor: Rc::new(RefCell::new(None)),
+            menu_anchors: Rc::new(RefCell::new(HashMap::new())),
             tx,
             error: None,
             mtime,
@@ -521,11 +523,18 @@ impl WidgetRuntime {
             let outputs = self.outputs.clone();
             let current_output = self.current_output.clone();
             let menu_anchor = self.menu_anchor.clone();
+            let menu_anchors = self.menu_anchors.clone();
             nt.set(
                 "menu",
                 lua.create_function(move |lua, (items, options): (Table, Option<Table>)| {
+                    let output_key = current_output.borrow().clone();
                     let anchor = MENU_ANCHOR
                         .with(|slot| slot.borrow().clone())
+                        .or_else(|| {
+                            output_key
+                                .as_ref()
+                                .and_then(|key| menu_anchors.borrow().get(key).cloned())
+                        })
                         .or_else(|| menu_anchor.borrow().clone());
                     let Some(anchor) = anchor else {
                         return Err(mlua::Error::runtime(
@@ -592,6 +601,8 @@ impl WidgetRuntime {
     }
 
     pub fn set_menu_anchor(&mut self, anchor: MenuAnchor) {
+        let key = self.current_output.borrow().clone().unwrap_or_default();
+        self.menu_anchors.borrow_mut().insert(key, anchor.clone());
         *self.menu_anchor.borrow_mut() = Some(anchor);
     }
 
