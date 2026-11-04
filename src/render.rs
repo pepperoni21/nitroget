@@ -12,12 +12,14 @@ use anyhow::Result;
 use gtk::prelude::*;
 use mlua::Value;
 
+use crate::component::ComponentKind;
 use crate::instance::Instance;
 use crate::state::Msg;
 use crate::template::{Element as TplElement, Node};
 
 pub struct Tree {
     pub root: gtk::Widget,
+    pub surface: gtk::Widget,
     pub nodes: Vec<RNode>,
 }
 
@@ -1205,7 +1207,7 @@ impl Instance {
 
         match self.build_tree() {
             Ok(tree) => {
-                self.window.set_child(Some(&tree.root));
+                self.window.set_child(Some(&tree.surface));
                 self.tree = Some(tree);
                 self.sync_keyboard_mode();
             }
@@ -1251,8 +1253,22 @@ impl Instance {
             }
         }
 
+        let root_widget: gtk::Widget = root.clone().upcast();
+        let surface: gtk::Widget = if matches!(self.comp.kind, ComponentKind::Panel(_)) {
+            let scrolled = gtk::ScrolledWindow::new();
+            scrolled.set_has_frame(false);
+            scrolled.set_policy(gtk::PolicyType::External, gtk::PolicyType::External);
+            scrolled.set_hexpand(true);
+            scrolled.set_vexpand(true);
+            scrolled.set_child(Some(&root));
+            scrolled.upcast()
+        } else {
+            root_widget.clone()
+        };
+
         Ok(Tree {
-            root: root.upcast(),
+            root: root_widget,
+            surface,
             nodes,
         })
     }

@@ -118,7 +118,8 @@ file rather than `config.toml`.
 | `height` | | thickness for top/bottom panels; `full` or omitted for left/right |
 
 Top and bottom panels span the full output width. Left and right panels span the
-full output height.
+full output height. A panel keeps its configured thickness; content larger than
+the panel is clipped.
 
 Panels are not part of the machine-local placement system. `config.toml` only
 applies `enabled` and `output` to a panel; `anchor`, `offset`, `width`, `height`,
