@@ -290,9 +290,7 @@ pub fn update_menu(items: Table) -> mlua::Result<()> {
 }
 
 fn build_menu(container: &gtk::Box, nodes: &[MenuNode], context: &MenuContext<'_>) {
-    while let Some(child) = container.first_child() {
-        container.remove(&child);
-    }
+    clear_menu(container);
 
     for node in nodes {
         if node.separator {
@@ -310,6 +308,21 @@ fn build_menu(container: &gtk::Box, nodes: &[MenuNode], context: &MenuContext<'_
         }
 
         container.append(&build_item(node, context));
+    }
+}
+
+fn clear_menu(container: &gtk::Box) {
+    while let Some(child) = container.first_child() {
+        if let Some(button) = child.downcast_ref::<gtk::MenuButton>()
+            && let Some(popover) = button.popover()
+        {
+            if let Some(content) = popover.child().and_downcast::<gtk::Box>() {
+                clear_menu(&content);
+            }
+            popover.popdown();
+            button.set_popover(None::<&gtk::Popover>);
+        }
+        container.remove(&child);
     }
 }
 
