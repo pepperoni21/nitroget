@@ -517,7 +517,7 @@ file in the widget folder reloads the widget.
 | `nitroget.run(cmd)` | run a shell command and ignore the output |
 | `nitroget.menu(items, options)` | open a menu |
 | `nitroget.close_menu()` | close the currently open menu |
-| `nitroget.update_menu(items)` | replace the items of the open menu in place |
+| `nitroget.update_menu(items)` | replace the items of the open menu |
 | `nitroget.refresh()` | force an update (timers and handlers do this already) |
 | `nitroget.log(msg)` | print to the terminal |
 | `nitroget.quit()` | stop the daemon |
@@ -575,20 +575,17 @@ Numeric ids stay numbers; string ids stay strings. Use `selected = true` for
 the current choice and `enabled = false` to keep it visible but non-interactive.
 `checked` only controls check and radio markers.
 
-`layout = "menu"` is the default vertical menu. It renders submenus,
-separators, icons and check/radio markers, and closes after selection by
-default. Set `close_on_select = false` to keep it open.
+`layout = "menu"` is vertical and supports submenus, separators, icons, and
+check/radio markers. `layout = "row"` and `layout = "column"` are flat button
+lists; `row` is horizontal, `column` is vertical. Flat layouts do not render
+submenus, and `row` does not render separators.
 
-`layout = "row"` and `layout = "column"` render flat button lists. `row` is
-horizontal and skips submenus and separators. `column` is vertical and renders
-separators but skips submenus. Flat layouts stay open after selection by
-default; set `close_on_select = true` to close them.
+`close_on_select` defaults to `true` for `menu` and `false` for `row` and
+`column`.
 
-Every layout supports `nitroget.update_menu(items)`, which replaces the open
-menu's items in place without closing or recreating it, and
-`nitroget.close_menu()`, which closes the open menu from Lua. On a widget shown
-on several outputs, a timer-opened menu uses the last clicked output, or a
-stable fallback; set `output` to choose explicitly.
+`nitroget.update_menu(items)` replaces the items of the open menu.
+`nitroget.close_menu()` closes it. On a multi-output widget, `output` selects
+the output used by a timer-opened menu.
 
 ### Shared and per-output state
 
