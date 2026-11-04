@@ -968,6 +968,7 @@ fn show_menu(items: Table, anchor: MenuAnchor, tx: async_channel::Sender<Msg>) -
 
     let popover = gtk::PopoverMenu::from_model(Some(&menu));
     popover.add_css_class("nitroget-menu");
+    popover.set_has_arrow(false);
     popover.set_parent(&anchor.parent);
     popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
         anchor.x.round() as i32,
