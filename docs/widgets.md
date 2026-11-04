@@ -525,9 +525,10 @@ file in the widget folder reloads the widget.
 
 ### Menus
 
-`nitroget.menu(items, options)` opens a native menu. It can be called from an
+`nitroget.menu(items, options)` opens a menu. It can be called from an
 `on:click` handler or from a timer; a click anchors the menu at the click, while
-a timer anchors it at the widget. `x` and `y` override the position.
+a timer anchors it at the widget. `x` and `y` override the position. Only one
+menu is open at a time.
 
 ```lua
 nitroget.menu({
@@ -575,8 +576,9 @@ icons and native checkmarks, and closes automatically after activation.
 
 `layout = "row"` and `layout = "column"` render flat button lists. They skip
 submenus and separators, stay open after selection by default, and support
-`close_on_select` and `nitroget.update_menu(items)`. Call
-`nitroget.close_menu()` to close any open menu from Lua.
+`close_on_select` and `nitroget.update_menu(items)`. `update_menu` rebuilds the
+open flat menu in place without closing it. Call `nitroget.close_menu()` to
+close any open menu from Lua.
 
 ### Shared and per-output state
 
