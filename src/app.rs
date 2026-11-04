@@ -16,6 +16,15 @@ use crate::ipc;
 use crate::state::{AppState, Msg, PlacementMsg};
 use crate::watcher;
 
+fn apply_renderer(renderer: &str) {
+    if renderer == "auto" || std::env::var_os("GSK_RENDERER").is_some() {
+        return;
+    }
+    unsafe {
+        std::env::set_var("GSK_RENDERER", renderer);
+    }
+}
+
 pub fn cmd_run(cli: &Cli) -> Result<()> {
     let target = cli.explicit_target();
     let config_path = cli.config_path();
@@ -53,6 +62,9 @@ pub fn cmd_run(cli: &Cli) -> Result<()> {
         eprintln!("create a starter widget with: nitroget new clock");
         return Ok(());
     }
+
+    let config = config::load(&config_path)?;
+    apply_renderer(config.renderer());
 
     // Bind the control socket before GTK starts.
     let (command_tx, command_rx) = async_channel::unbounded::<String>();

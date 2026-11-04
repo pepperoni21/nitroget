@@ -85,6 +85,10 @@ See [`config.example.toml`](config.example.toml) and `nitroget placement`.
 Writing `anchor`, `offset` or `output` in a widget is ignored, and
 `nitroget check` tells you so.
 
+`defaults.renderer` selects the GTK renderer: `cairo` (default), `auto`, `gl` or
+`vulkan`. Cairo uses the least memory; `auto` lets GTK choose a GPU renderer.
+An existing `GSK_RENDERER` environment variable takes precedence.
+
 `name` must be unique within a widget folder: it scopes the CSS and is the key
 the placement config uses.
 

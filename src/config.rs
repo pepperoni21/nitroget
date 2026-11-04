@@ -54,6 +54,7 @@ pub struct Defaults {
     pub output: Option<String>,
     /// Edge margin for automatically placed widgets.
     pub margin: Option<i32>,
+    pub renderer: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -125,6 +126,10 @@ pub fn load(path: &Path) -> Result<Config> {
 impl Config {
     pub fn margin(&self) -> i32 {
         self.defaults.margin.unwrap_or(DEFAULT_MARGIN).max(0)
+    }
+
+    pub fn renderer(&self) -> &str {
+        self.defaults.renderer.as_deref().unwrap_or("cairo")
     }
 
     pub fn default_output(&self) -> Option<&str> {
@@ -234,6 +239,10 @@ impl Config {
         }
         if let Some(output) = &self.defaults.output {
             validate_output(output, "defaults")?;
+        }
+        match self.renderer() {
+            "auto" | "cairo" | "gl" | "vulkan" => {}
+            other => bail!("defaults.renderer must be auto, cairo, gl or vulkan, not {other}"),
         }
 
         for (alias, target) in &self.outputs {
@@ -568,6 +577,18 @@ mod tests {
         let mut panels = vec![comp];
         auto_place(&mut panels, &config);
         assert!(panels[0].placement.anchor.is_none());
+    }
+
+    #[test]
+    fn renderer_defaults_to_cairo_and_accepts_valid_values() {
+        assert_eq!(Config::default().renderer(), "cairo");
+
+        let config: Config = toml::from_str("[defaults]\nrenderer = \"gl\"\n").unwrap();
+        assert_eq!(config.renderer(), "gl");
+        assert!(config.validate().is_ok());
+
+        let config: Config = toml::from_str("[defaults]\nrenderer = \"software\"\n").unwrap();
+        assert!(config.validate().is_err());
     }
 
     #[test]
