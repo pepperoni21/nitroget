@@ -114,10 +114,10 @@ impl Instance {
         self.tree = None;
         self.textures.clear();
 
-        let previous = std::mem::replace(&mut self.comp, comp);
+        self.comp = comp;
         apply_placement(
             &self.window,
-            Some(&previous.placement),
+            None,
             &self.comp.placement,
             &self.comp.kind,
             self.use_layer_shell,
