@@ -223,13 +223,16 @@ pub fn show_menu(
     let layer_shell = anchor.layer_shell;
     popover.connect_closed(move |popover| {
         popover.unparent();
-        OPEN_MENU.with(|slot| {
+        let closed = OPEN_MENU.with(|slot| {
             let mut slot = slot.borrow_mut();
             if slot.as_ref().is_some_and(|state| state.popover == *popover) {
                 *slot = None;
+                true
+            } else {
+                false
             }
         });
-        if layer_shell {
+        if closed && layer_shell {
             use gtk4_layer_shell::LayerShell;
             window.set_keyboard_mode(gtk4_layer_shell::KeyboardMode::None);
         }

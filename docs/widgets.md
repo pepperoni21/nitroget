@@ -586,7 +586,9 @@ default; set `close_on_select = true` to close them.
 
 Every layout supports `nitroget.update_menu(items)`, which replaces the open
 menu's items in place without closing or recreating it, and
-`nitroget.close_menu()`, which closes the open menu from Lua.
+`nitroget.close_menu()`, which closes the open menu from Lua. On a widget shown
+on several outputs, a timer-opened menu uses the last clicked output, or a
+stable fallback; set `output` to choose explicitly.
 
 ### Shared and per-output state
 
