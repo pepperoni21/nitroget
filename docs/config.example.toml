@@ -15,6 +15,7 @@ side = "HDMI-A-1"
 [defaults]
 output = "main"      # alias, connector, "all", "primary", or omit for auto
 margin = 40
+renderer = "cairo"
 
 [widgets.clock]
 anchor = "top-right"
