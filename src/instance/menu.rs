@@ -202,9 +202,7 @@ pub fn show_menu(
 
     let old = OPEN_MENU.with(|slot| slot.borrow_mut().take());
     if let Some(old) = old {
-        clear_menu(&old.container);
-        old.popover.popdown();
-        old.popover.unparent();
+        release_menu(&old);
     }
 
     let popover = gtk::Popover::new();
@@ -234,22 +232,19 @@ pub fn show_menu(
     };
     build_menu(&container, &nodes, &context);
 
-    let window = anchor.window.clone();
-    let layer_shell = anchor.layer_shell;
     popover.connect_closed(move |popover| {
+        popover.set_child(None::<&gtk::Widget>);
         popover.unparent();
         let closed = OPEN_MENU.with(|slot| {
             let mut slot = slot.borrow_mut();
             if slot.as_ref().is_some_and(|state| state.popover == *popover) {
-                *slot = None;
-                true
+                slot.take()
             } else {
-                false
+                None
             }
         });
-        if closed && layer_shell {
-            use gtk4_layer_shell::LayerShell;
-            window.set_keyboard_mode(gtk4_layer_shell::KeyboardMode::None);
+        if let Some(state) = closed {
+            reset_keyboard(&state.anchor);
         }
     });
 
@@ -266,13 +261,7 @@ pub fn show_menu(
         });
     });
 
-    if layer_shell {
-        use gtk4_layer_shell::LayerShell;
-        anchor
-            .window
-            .set_keyboard_mode(gtk4_layer_shell::KeyboardMode::OnDemand);
-    }
-
+    enter_keyboard(&anchor);
     popover.popup();
     popover.child_focus(gtk::DirectionType::TabForward);
     Ok(())
@@ -281,8 +270,7 @@ pub fn show_menu(
 pub fn close_menu() {
     let old = OPEN_MENU.with(|slot| slot.borrow_mut().take());
     if let Some(state) = old {
-        clear_menu(&state.container);
-        state.popover.popdown();
+        release_menu(&state);
     }
 }
 
@@ -328,6 +316,32 @@ fn build_menu(container: &gtk::Box, nodes: &[MenuNode], context: &MenuContext<'_
         }
 
         container.append(&build_item(node, context));
+    }
+}
+
+fn release_menu(state: &MenuState) {
+    clear_menu(&state.container);
+    state.popover.popdown();
+    state.popover.set_child(None::<&gtk::Widget>);
+    state.popover.unparent();
+    reset_keyboard(&state.anchor);
+}
+
+fn enter_keyboard(anchor: &MenuAnchor) {
+    if anchor.layer_shell {
+        use gtk4_layer_shell::LayerShell;
+        anchor
+            .window
+            .set_keyboard_mode(gtk4_layer_shell::KeyboardMode::OnDemand);
+    }
+}
+
+fn reset_keyboard(anchor: &MenuAnchor) {
+    if anchor.layer_shell {
+        use gtk4_layer_shell::LayerShell;
+        anchor
+            .window
+            .set_keyboard_mode(gtk4_layer_shell::KeyboardMode::None);
     }
 }
 
@@ -382,7 +396,7 @@ fn build_item(node: &MenuNode, context: &MenuContext<'_>) -> gtk::Widget {
     let id = node.id.clone();
     let code = node.action.clone();
     let checked = next_checked(node);
-    let popover = context.root.clone();
+    let popover = context.root.downgrade();
     let close_on_select = context.close_on_select;
     button.connect_clicked(move |_| {
         if let Some(callback) = &callback {
@@ -403,7 +417,7 @@ fn build_item(node: &MenuNode, context: &MenuContext<'_>) -> gtk::Widget {
                 code: code.clone(),
             });
         }
-        if close_on_select {
+        if close_on_select && let Some(popover) = popover.upgrade() {
             popover.popdown();
         }
     });
