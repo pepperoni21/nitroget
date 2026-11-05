@@ -1,10 +1,10 @@
 //! Single-owner application state and the message loop.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use async_channel::Sender;
 use gtk::prelude::*;
@@ -153,6 +153,7 @@ pub struct AppState {
     pub widgets: HashMap<WidgetKey, Running>,
     pub runtimes: HashMap<PathBuf, Rc<RefCell<WidgetRuntime>>>,
     pub retired: Vec<Instance>,
+    pending_renders: HashSet<PathBuf>,
     pub placement: Placement,
     /// Removes the control socket when the daemon shuts down cleanly.
     socket: Option<crate::ipc::SocketGuard>,
@@ -178,6 +179,7 @@ impl AppState {
             widgets: HashMap::new(),
             runtimes: HashMap::new(),
             retired: Vec::new(),
+            pending_renders: HashSet::new(),
             placement,
             socket,
         }
@@ -197,7 +199,10 @@ impl AppState {
             Msg::MenuAction { key, code } => self.run(&key, &code, None),
             Msg::Change { key, code, value } => self.run(&key, &code, Some(value)),
             Msg::Text { key, code, value } => self.run_text(&key, &code, &value),
-            Msg::Render { path } => self.render_path(&path),
+            Msg::Render { path } => {
+                self.pending_renders.remove(&path);
+                self.render_path(&path);
+            }
             Msg::Timer { path, id } => self.fire_timer(&path, id),
             Msg::RegisterTimer {
                 path,
@@ -333,7 +338,7 @@ impl AppState {
             false
         };
         if fired {
-            self.render_path(path);
+            self.schedule_render(path);
         }
     }
 
@@ -347,8 +352,21 @@ impl AppState {
             false
         };
         if fired {
+            self.pending_renders.remove(path);
             self.render_path(path);
         }
+    }
+
+    fn schedule_render(&mut self, path: &Path) {
+        if !self.pending_renders.insert(path.to_path_buf()) {
+            return;
+        }
+
+        let tx = self.tx.clone();
+        let path = path.to_path_buf();
+        gtk::glib::timeout_add_local_once(Duration::from_millis(33), move || {
+            let _ = tx.send_blocking(Msg::Render { path });
+        });
     }
 
     fn clear_stream(&mut self, path: &Path, id: u64) {
