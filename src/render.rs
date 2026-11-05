@@ -1278,13 +1278,11 @@ impl Instance {
 
         let root_widget: gtk::Widget = root.clone().upcast();
         let surface: gtk::Widget = if matches!(self.comp.kind, ComponentKind::Panel(_)) {
-            let scrolled = gtk::ScrolledWindow::new();
-            scrolled.set_has_frame(false);
-            scrolled.set_policy(gtk::PolicyType::External, gtk::PolicyType::External);
-            scrolled.set_hexpand(true);
-            scrolled.set_vexpand(true);
-            scrolled.set_child(Some(&root));
-            scrolled.upcast()
+            let clip = crate::clip::Clip::new();
+            clip.set_hexpand(true);
+            clip.set_vexpand(true);
+            clip.set_child(&root);
+            clip.upcast()
         } else {
             root_widget.clone()
         };

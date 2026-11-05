@@ -9,6 +9,7 @@
 
 mod app;
 mod cli;
+mod clip;
 mod component;
 mod config;
 mod css;
