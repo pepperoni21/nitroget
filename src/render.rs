@@ -657,6 +657,12 @@ fn build_element(inst: &mut Instance, element: &TplElement) -> Result<RNode> {
             if element.attr("wrap").is_some_and(|value| value == "true") {
                 label.set_wrap(true);
             }
+            if element
+                .attr("selectable")
+                .is_some_and(|value| value == "true")
+            {
+                label.set_selectable(true);
+            }
             label.set_xalign(match element.attr("align") {
                 Some("start" | "left") => 0.0,
                 Some("end" | "right") => 1.0,

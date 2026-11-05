@@ -253,6 +253,7 @@ Interpolation works in both.
 | --- | --- |
 | `text` | text template (instead of children) |
 | `markdown` | `true` renders CommonMark/GFM as Pango markup |
+| `selectable` | `true` allows selecting and copying the text |
 | `wrap` | `true` to wrap long text |
 | `align` | `start`, `center`, `end` |
 
