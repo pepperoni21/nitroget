@@ -124,6 +124,7 @@ enum RKind {
         label: gtk::Label,
         raw: String,
         last: String,
+        markdown: bool,
     },
     Button {
         button: gtk::Button,
@@ -179,10 +180,19 @@ impl RElement {
         match &mut self.kind {
             RKind::Container | RKind::Static => {}
 
-            RKind::Label { label, raw, last } => {
+            RKind::Label {
+                label,
+                raw,
+                last,
+                markdown,
+            } => {
                 let text = inst.interp(raw)?;
                 if text != *last {
-                    label.set_text(&text);
+                    if *markdown {
+                        label.set_markup(&crate::markdown::to_pango(&text));
+                    } else {
+                        label.set_text(&text);
+                    }
                     *last = text;
                 }
             }
@@ -637,7 +647,13 @@ fn build_element(inst: &mut Instance, element: &TplElement) -> Result<RNode> {
             };
             let text = inst.interp(&raw)?;
 
+            let markdown = element
+                .attr("markdown")
+                .is_some_and(|value| value == "true");
             let label = gtk::Label::new(Some(&text));
+            if markdown {
+                label.set_markup(&crate::markdown::to_pango(&text));
+            }
             if element.attr("wrap").is_some_and(|value| value == "true") {
                 label.set_wrap(true);
             }
@@ -654,6 +670,7 @@ fn build_element(inst: &mut Instance, element: &TplElement) -> Result<RNode> {
                     label,
                     raw,
                     last: text,
+                    markdown,
                 },
                 Vec::new(),
             )

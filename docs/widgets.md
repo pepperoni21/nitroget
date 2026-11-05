@@ -252,6 +252,7 @@ Interpolation works in both.
 | Attribute | Meaning |
 | --- | --- |
 | `text` | text template (instead of children) |
+| `markdown` | `true` renders CommonMark/GFM as Pango markup |
 | `wrap` | `true` to wrap long text |
 | `align` | `start`, `center`, `end` |
 
