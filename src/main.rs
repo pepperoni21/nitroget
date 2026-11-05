@@ -16,6 +16,7 @@ mod discovery;
 mod instance;
 mod ipc;
 mod layout;
+mod markdown;
 mod placement;
 mod reconcile;
 mod render;
