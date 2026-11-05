@@ -1284,6 +1284,16 @@ impl Instance {
             scrolled.set_hexpand(true);
             scrolled.set_vexpand(true);
             scrolled.set_child(Some(&root));
+
+            let controllers: Vec<gtk::EventController> = scrolled
+                .observe_controllers()
+                .iter::<gtk::EventController>()
+                .filter_map(Result::ok)
+                .collect();
+            for controller in controllers {
+                scrolled.remove_controller(&controller);
+            }
+
             scrolled.upcast()
         } else {
             root_widget.clone()
