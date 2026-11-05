@@ -119,6 +119,10 @@ pub fn to_pango(source: &str) -> String {
         }
     }
 
+    while out.ends_with('\n') {
+        out.pop();
+    }
+
     out
 }
 
@@ -184,5 +188,13 @@ mod tests {
         assert!(output.contains("• one"));
         assert!(output.contains("<a href=\"https://example.com\">site</a>"));
         assert!(output.contains("<tt>x &lt; y"));
+    }
+
+    #[test]
+    fn trims_trailing_block_separators() {
+        assert_eq!(to_pango("Hello"), "Hello");
+        assert_eq!(to_pango("Hello\n\nWorld"), "Hello\n\nWorld");
+        assert!(!to_pango("# Heading").ends_with('\n'));
+        assert!(!to_pango("```\ncode\n```").ends_with('\n'));
     }
 }
