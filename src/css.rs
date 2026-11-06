@@ -90,7 +90,7 @@ fn prefix_selectors(prelude: &str, scope: &str) -> String {
             out.push_str(", ");
         }
         match sel.as_str() {
-            ":host" | "widget" => out.push_str(&format!(".{scope}")),
+            ":host" | "widget" => out.push_str(&format!(".{scope}.nitroget-root")),
             "*" => out.push_str(&format!(".{scope} *")),
             _ => out.push_str(&format!(".{scope} {sel}")),
         }
@@ -222,7 +222,7 @@ mod tests {
 
     #[test]
     fn rewrites_host() {
-        assert!(scope(":host { color: red; }", "n-a").contains(".n-a {"));
+        assert!(scope(":host { color: red; }", "n-a").contains(".n-a.nitroget-root {"));
     }
 
     #[test]
