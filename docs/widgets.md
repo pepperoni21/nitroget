@@ -161,21 +161,53 @@ output = "all"
 | `spacer` | flexible empty space |
 | `sep` | horizontal separator |
 
+### Attribute values
+
+A bare attribute value is literal. A `{ ... }` value is always a Lua
+expression:
+
+```html
+<label text="Clear" />
+<label text="{draft}" />
+<label text="CPU: {cpu}%" />
+
+<label visible="true" />
+<label visible="{count > 0}" />
+
+<select options="{models}" selected="{model}" />
+<select options="{models}" selected="qwen3.5:4b" />
+```
+
+For string attributes (`class`, `text`, `tooltip`, `src`, `placeholder`),
+literal text and expression segments may be mixed. For typed attributes
+(boolean, number, enum, and table), the whole value must be either a valid
+literal or one expression. `options` requires an expression returning a table.
+`on:click`, `on:change` and `on:submit` contain raw Lua code.
+
+Static flags (`markdown`, `selectable`, `wrap`, `follow`, `vertical`, `expand`,
+`hexpand`, `vexpand`) accept only `true` or `false`; they do not accept
+expressions. Layout attributes such as `width`, `height`, `gap` and `columns`
+are evaluated when the widget is built. `class`, `text`, `tooltip`, `src`,
+`visible`, bar/slider `value` and `max`, `options`, and `selected` are updated
+on each render.
+
+Write a literal brace as `\{`.
+
 ### Common attributes
 
 These work on every element:
 
 | Attribute | Meaning |
 | --- | --- |
-| `class` | CSS classes, space-separated; may contain `{ expr }` |
-| `id` | GTK widget name |
-| `width`, `height` | fixed size request |
-| `expand` | expand in both directions |
-| `hexpand`, `vexpand` | expand in one direction |
-| `halign`, `valign` | `start`, `center`, `end`, `fill` |
-| `tooltip` | tooltip text; may contain `{ expr }` |
-| `cursor` | cursor name over the element, such as `pointer` or `text` |
-| `visible` | show/hide; a Lua expression such as `{count > 0}` |
+| `class` | CSS classes, space-separated; template |
+| `id` | GTK widget name; literal or expression |
+| `width`, `height` | fixed size request; number or expression |
+| `expand` | `true` or `false` |
+| `hexpand`, `vexpand` | `true` or `false` |
+| `halign`, `valign` | `start`, `center`, `end`, `fill`; literal or expression |
+| `tooltip` | tooltip text; template |
+| `cursor` | cursor name; literal or expression |
+| `visible` | `true`, `false`, or a boolean expression |
 | `on:click` | Lua code to run when clicked |
 
 `on:click` is passed to Lua as a chunk. Either call a function or write the
@@ -252,10 +284,10 @@ Interpolation works in both.
 | Attribute | Meaning |
 | --- | --- |
 | `text` | text template (instead of children) |
-| `markdown` | `true` renders CommonMark/GFM as Pango markup |
-| `selectable` | `true` allows selecting and copying the text |
-| `wrap` | `true` to wrap long text |
-| `align` | `start`, `center`, `end` |
+| `markdown` | `true` or `false`; renders CommonMark/GFM as Pango markup |
+| `selectable` | `true` or `false`; allows selecting and copying the text |
+| `wrap` | `true` or `false`; wraps long text |
+| `align` | `start`, `center`, `end`; literal or expression |
 
 ### `bar`
 
@@ -332,13 +364,13 @@ do not fire `on:change`. Keyboard focus is requested on demand while a visible
 Dropdown selection (`GtkDropDown`).
 
 ```html
-<select options="models" selected="model" on:change="model = event.value" />
+<select options="{models}" selected="{model}" on:change="model = event.value" />
 ```
 
 | Attribute | Meaning |
 | --- | --- |
-| `options` | Lua expression returning an array of strings |
-| `selected` | Lua expression returning the selected string |
+| `options` | expression returning an array of strings |
+| `selected` | literal string or expression returning the selected string |
 | `on:change` | Lua code run when the selection changes |
 
 `event.value` is the selected string. If `selected` is missing from `options`,
@@ -367,8 +399,8 @@ cached, so updating other parts of the widget does not reload the file.
 
 | Attribute | Default | Meaning |
 | --- | --- | --- |
-| `src` | | file path; may contain `{ expr }` |
-| `fit` | `contain` | `contain`, `cover`, `fill` |
+| `src` | | file path template |
+| `fit` | `contain` | `contain`, `cover`, `fill`; literal or expression |
 
 ### `spacer` and `sep`
 
@@ -411,11 +443,19 @@ Any `{ expression }` is evaluated by Lua:
 <label>{#items}</label>
 ```
 
-In a numeric attribute the value is used as a number:
+Bare values are literal. Quotes delimit an attribute value; they do not make it
+a string:
 
 ```html
-<bar value="{cpu}" max="{limit}" />
+<label visible="{count > 0}" />
+<label text="Clear" />
+<label text="{draft}" />
+<label text="CPU: {cpu}%" />
+<bar value="{cpu}" max="100" />
 ```
+
+For a typed attribute, the whole value must be a literal or one expression.
+Invalid values are errors rather than silent defaults.
 
 Write a literal brace as `\{`.
 

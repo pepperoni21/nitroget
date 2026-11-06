@@ -255,6 +255,14 @@ pub fn cmd_check(cli: &Cli) -> Result<()> {
             failures += 1;
         }
 
+        let template_errors = crate::render::lint_template(&comp.template);
+        if !template_errors.is_empty() {
+            failures += 1;
+        }
+        for error in template_errors {
+            println!("      error: {error}");
+        }
+
         let mut notes = comp.notes.clone();
         notes.extend(lint(comp));
         for note in notes {

@@ -8,9 +8,9 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow, bail};
 use gtk::prelude::*;
-use mlua::Value;
+use mlua::{Table, Value};
 
 use crate::component::ComponentKind;
 use crate::instance::Instance;
@@ -156,7 +156,7 @@ enum RKind {
     },
     Select {
         dropdown: gtk::DropDown,
-        options: String,
+        options: Option<String>,
         selected: String,
         last_options: Vec<String>,
         last_selected: Option<String>,
@@ -216,12 +216,9 @@ impl RElement {
                 max,
                 last,
             } => {
-                let value = eval_num(inst, value)?.unwrap_or(0.0);
+                let value = eval_num(inst, value)?;
                 let max = match max {
-                    Some(expr) => eval_num(inst, expr)?
-                        .unwrap_or(100.0)
-                        .abs()
-                        .max(f64::EPSILON),
+                    Some(expr) => eval_num(inst, expr)?.abs().max(f64::EPSILON),
                     None => 100.0,
                 };
                 let fraction = (value / max).clamp(0.0, 1.0);
@@ -237,7 +234,7 @@ impl RElement {
                 last,
                 suppress,
             } => {
-                let value = eval_num(inst, value)?.unwrap_or(*last);
+                let value = eval_num(inst, value)?;
                 if (value - *last).abs() > 1e-9 {
                     suppress.set(true);
                     scale.set_value(value);
@@ -279,10 +276,13 @@ impl RElement {
                 last_selected,
                 suppress,
             } => {
-                let values: Vec<String> = eval_list(inst, options)?
-                    .iter()
-                    .map(value_to_string)
-                    .collect();
+                let values: Vec<String> = match options {
+                    Some(expr) => eval_options(inst, expr)?
+                        .iter()
+                        .map(value_to_string)
+                        .collect(),
+                    None => Vec::new(),
+                };
                 let options_changed = values != *last_options;
 
                 if options_changed {
@@ -294,7 +294,7 @@ impl RElement {
                     *last_options = values.clone();
                 }
 
-                let selected_value = value_to_string(&inst.eval_value(selected)?);
+                let selected_value = eval_string_value(inst, selected)?;
                 let index = values.iter().position(|value| *value == selected_value);
                 let active = if values.is_empty() {
                     None
@@ -347,7 +347,7 @@ impl RElement {
         }
 
         if let Some(expr) = &self.visible_expr {
-            let visible = inst.eval_bool(expr)?;
+            let visible = eval_bool_value(inst, expr)?;
             if visible != self.visible {
                 self.widget.set_visible(visible);
                 self.visible = visible;
@@ -597,11 +597,7 @@ fn build_element(inst: &mut Instance, element: &TplElement) -> Result<RNode> {
             } else {
                 gtk::Orientation::Vertical
             };
-            let spacing = if let Some(gap) = element.attr("gap") {
-                eval_num(inst, gap)?.unwrap_or(0.0) as i32
-            } else {
-                0
-            };
+            let spacing = number_attr(inst, element, "gap")?.unwrap_or(0.0) as i32;
 
             let container = gtk::Box::new(orientation, spacing);
             let children = build_nodes(inst, &element.children, orientation)?;
@@ -612,15 +608,10 @@ fn build_element(inst: &mut Instance, element: &TplElement) -> Result<RNode> {
         }
 
         "grid" => {
-            let columns = match element.attr("columns") {
-                Some(raw) => eval_num(inst, raw)?.unwrap_or(1.0) as i32,
-                None => 1,
-            }
-            .max(1) as usize;
-            let spacing = match element.attr("gap") {
-                Some(raw) => eval_num(inst, raw)?.unwrap_or(0.0) as i32,
-                None => 0,
-            };
+            let columns = number_attr(inst, element, "columns")?
+                .unwrap_or(1.0)
+                .max(1.0) as usize;
+            let spacing = number_attr(inst, element, "gap")?.unwrap_or(0.0) as i32;
 
             let grid = gtk::Grid::new();
             grid.set_column_homogeneous(true);
@@ -647,28 +638,22 @@ fn build_element(inst: &mut Instance, element: &TplElement) -> Result<RNode> {
             };
             let text = inst.interp(&raw)?;
 
-            let markdown = element
-                .attr("markdown")
-                .is_some_and(|value| value == "true");
+            let markdown = static_bool_attr(element, "markdown")?;
             let label = gtk::Label::new(Some(&text));
             if markdown {
                 label.set_markup(&crate::markdown::to_pango(&text));
             }
-            if element.attr("wrap").is_some_and(|value| value == "true") {
+            if static_bool_attr(element, "wrap")? {
                 label.set_wrap(true);
             }
-            if element
-                .attr("selectable")
-                .is_some_and(|value| value == "true")
-            {
+            if static_bool_attr(element, "selectable")? {
                 label.set_selectable(true);
             }
-            label.set_xalign(match element.attr("align") {
-                Some("start" | "left") => 0.0,
-                Some("end" | "right") => 1.0,
-                Some("center") => 0.5,
-                _ => 0.0,
-            });
+            let xalign = match enum_attr(inst, element, "align", ALIGN_TEXT)? {
+                Some(value) => parse_xalign(&value)?,
+                None => 0.0,
+            };
+            label.set_xalign(xalign);
 
             (
                 label.clone().upcast(),
@@ -689,14 +674,11 @@ fn build_element(inst: &mut Instance, element: &TplElement) -> Result<RNode> {
             let bar = gtk::ProgressBar::new();
             bar.set_show_text(false);
 
-            let current = eval_num(inst, &value)?.unwrap_or(0.0);
-            let limit = match &max {
-                Some(expr) => eval_num(inst, expr)?
-                    .unwrap_or(100.0)
-                    .abs()
-                    .max(f64::EPSILON),
-                None => 100.0,
-            };
+            let current = number_attr(inst, element, "value")?.unwrap_or(0.0);
+            let limit = number_attr(inst, element, "max")?
+                .unwrap_or(100.0)
+                .abs()
+                .max(f64::EPSILON);
             let fraction = (current / limit).clamp(0.0, 1.0);
             bar.set_fraction(fraction);
 
@@ -717,7 +699,7 @@ fn build_element(inst: &mut Instance, element: &TplElement) -> Result<RNode> {
             let max = number_attr(inst, element, "max")?.unwrap_or(100.0);
             let step = number_attr(inst, element, "step")?.unwrap_or(1.0);
             let value_raw = element.attr("value").unwrap_or("0").to_string();
-            let value = eval_num(inst, &value_raw)?.unwrap_or(min);
+            let value = number_attr(inst, element, "value")?.unwrap_or(min);
 
             let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, min, max, step);
             scale.set_value(value);
@@ -816,12 +798,10 @@ fn build_element(inst: &mut Instance, element: &TplElement) -> Result<RNode> {
             let src = element.attr("src").unwrap_or("").to_string();
             let path = inst.interp(&src)?;
 
+            let fit = enum_attr(inst, element, "fit", FIT_VALUES)?
+                .unwrap_or_else(|| "contain".to_string());
             let picture = gtk::Picture::new();
-            picture.set_content_fit(match element.attr("fit") {
-                Some("cover") => gtk::ContentFit::Cover,
-                Some("fill") => gtk::ContentFit::Fill,
-                _ => gtk::ContentFit::Contain,
-            });
+            picture.set_content_fit(parse_fit(&fit)?);
             picture.set_can_shrink(true);
             set_picture(inst, &picture, &path);
 
@@ -890,13 +870,25 @@ fn build_element(inst: &mut Instance, element: &TplElement) -> Result<RNode> {
         }
 
         "select" => {
-            let options = element.attr("options").unwrap_or("{}").to_string();
-            let selected = element.attr("selected").unwrap_or("\"\"").to_string();
-            let values: Vec<String> = eval_list(inst, &options)?
-                .iter()
-                .map(value_to_string)
-                .collect();
-            let selected_value = value_to_string(&inst.eval_value(&selected)?);
+            let options = match element.attr("options") {
+                Some(raw) => Some(
+                    expression(raw)
+                        .ok_or_else(|| {
+                            attr_error(element, "options", "an expression like {models}", raw)
+                        })?
+                        .to_string(),
+                ),
+                None => None,
+            };
+            let selected = element.attr("selected").unwrap_or("").to_string();
+            let values: Vec<String> = match &options {
+                Some(expr) => eval_options(inst, expr)?
+                    .iter()
+                    .map(value_to_string)
+                    .collect(),
+                None => Vec::new(),
+            };
+            let selected_value = eval_string_value(inst, &selected)?;
             let index = values.iter().position(|value| *value == selected_value);
 
             let dropdown = {
@@ -980,7 +972,7 @@ fn build_element(inst: &mut Instance, element: &TplElement) -> Result<RNode> {
                 scrolled.set_child(Some(&container));
             }
 
-            if element.attr("follow").is_some_and(|value| value == "true") {
+            if static_bool_attr(element, "follow")? {
                 let adjustment = scrolled.vadjustment();
                 let tracking = Rc::new(Cell::new(true));
 
@@ -1005,10 +997,7 @@ fn build_element(inst: &mut Instance, element: &TplElement) -> Result<RNode> {
         "spacer" => {
             let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
             spacer.set_hexpand(true);
-            if element
-                .attr("vertical")
-                .is_some_and(|value| value == "true")
-            {
+            if static_bool_attr(element, "vertical")? {
                 spacer.set_vexpand(true);
             }
             (spacer.upcast(), RKind::Static, Vec::new())
@@ -1071,8 +1060,8 @@ fn apply_common(
         common.classes = classes;
     }
 
-    if let Some(id) = element.attr("id") {
-        widget.set_widget_name(id);
+    if let Some(id) = string_attr(inst, element, "id")? {
+        widget.set_widget_name(&id);
     }
 
     let width = number_attr(inst, element, "width")?.map(|value| value as i32);
@@ -1081,22 +1070,22 @@ fn apply_common(
         widget.set_size_request(width.unwrap_or(-1), height.unwrap_or(-1));
     }
 
-    if element.attr("expand").is_some_and(|value| value == "true") {
+    if static_bool_attr(element, "expand")? {
         widget.set_hexpand(true);
         widget.set_vexpand(true);
     }
-    if element.attr("hexpand").is_some_and(|value| value == "true") {
+    if static_bool_attr(element, "hexpand")? {
         widget.set_hexpand(true);
     }
-    if element.attr("vexpand").is_some_and(|value| value == "true") {
+    if static_bool_attr(element, "vexpand")? {
         widget.set_vexpand(true);
     }
 
-    if let Some(align) = element.attr("halign") {
-        widget.set_halign(parse_align(align));
+    if let Some(align) = enum_attr(inst, element, "halign", ALIGN_AXIS)? {
+        widget.set_halign(parse_align(&align)?);
     }
-    if let Some(align) = element.attr("valign") {
-        widget.set_valign(parse_align(align));
+    if let Some(align) = enum_attr(inst, element, "valign", ALIGN_AXIS)? {
+        widget.set_valign(parse_align(&align)?);
     }
 
     if let Some(raw) = element.attr("tooltip") {
@@ -1107,14 +1096,14 @@ fn apply_common(
     }
 
     if let Some(raw) = element.attr("visible") {
-        let visible = inst.eval_bool(raw)?;
+        let visible = bool_attr(inst, element, "visible")?.unwrap_or(false);
         widget.set_visible(visible);
-        common.visible_expr = Some(raw.to_string());
+        common.visible_expr = expression(raw).map(str::to_string);
         common.visible = visible;
     }
 
-    if let Some(raw) = element.attr("cursor") {
-        let name = raw.trim();
+    if let Some(name) = string_attr(inst, element, "cursor")? {
+        let name = name.trim();
         widget.set_cursor_from_name((!name.is_empty()).then_some(name));
     }
 
@@ -1404,43 +1393,298 @@ fn raw_children_text(nodes: &[Node]) -> String {
     out.trim().to_string()
 }
 
-fn eval_list(inst: &Instance, expr: &str) -> Result<Vec<Value>> {
-    let value = inst.eval_value(expr)?;
-    match value {
-        Value::Table(table) => {
-            let length = table.raw_len();
-            if length > 0 {
-                let mut out = Vec::with_capacity(length);
-                for index in 1..=length {
-                    out.push(table.raw_get(index)?);
-                }
-                Ok(out)
-            } else {
-                let pairs = table
-                    .pairs::<Value, Value>()
-                    .collect::<mlua::Result<Vec<_>>>()?;
-                Ok(pairs.into_iter().map(|(_, value)| value).collect())
+pub fn lint_template(nodes: &[Node]) -> Vec<String> {
+    let mut errors = Vec::new();
+    lint_nodes(nodes, &mut errors);
+    errors
+}
+
+fn lint_nodes(nodes: &[Node], errors: &mut Vec<String>) {
+    for node in nodes {
+        match node {
+            Node::Element(element) => lint_element(element, errors),
+            Node::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                lint_nodes(then_body, errors);
+                lint_nodes(else_body, errors);
+            }
+            Node::Each { body, .. } => lint_nodes(body, errors),
+            Node::Text(_) => {}
+        }
+    }
+}
+
+fn lint_element(element: &TplElement, errors: &mut Vec<String>) {
+    const STATIC_BOOLS: &[&str] = &[
+        "markdown",
+        "selectable",
+        "wrap",
+        "follow",
+        "vertical",
+        "expand",
+        "hexpand",
+        "vexpand",
+    ];
+
+    for name in STATIC_BOOLS {
+        let Some(raw) = element.attr(name) else {
+            continue;
+        };
+        if expression(raw).is_some() {
+            errors.push(format!(
+                "<{}> attribute `{name}` does not accept expressions",
+                element.tag
+            ));
+        } else if !matches!(raw.trim(), "true" | "false") {
+            errors.push(format!(
+                "<{}> attribute `{name}` expects true or false, got `{raw}`",
+                element.tag
+            ));
+        }
+    }
+
+    if let Some(raw) = element.attr("visible")
+        && expression(raw).is_none()
+        && !matches!(raw.trim(), "true" | "false")
+    {
+        errors.push(format!(
+            "<{}> attribute `visible` expects true, false, or {{expression}}, got `{raw}`",
+            element.tag
+        ));
+    }
+
+    lint_number(element, "width", errors);
+    lint_number(element, "height", errors);
+
+    match element.tag.as_str() {
+        "box" | "row" => lint_number(element, "gap", errors),
+        "grid" => {
+            lint_number(element, "gap", errors);
+            lint_number(element, "columns", errors);
+        }
+        "scroll" => lint_number(element, "max-height", errors),
+        "bar" => {
+            lint_number(element, "value", errors);
+            lint_number(element, "max", errors);
+        }
+        "slider" => {
+            for name in ["value", "min", "max", "step"] {
+                lint_number(element, name, errors);
             }
         }
+        _ => {}
+    }
+
+    lint_enum(element, "halign", ALIGN_AXIS, errors);
+    lint_enum(element, "valign", ALIGN_AXIS, errors);
+
+    match element.tag.as_str() {
+        "label" => lint_enum(element, "align", ALIGN_TEXT, errors),
+        "image" => lint_enum(element, "fit", FIT_VALUES, errors),
+        _ => {}
+    }
+
+    if element.tag == "select"
+        && let Some(raw) = element.attr("options")
+        && expression(raw).is_none()
+    {
+        errors.push(format!(
+            "<select> attribute `options` expects an expression like {{models}}, got `{raw}`"
+        ));
+    }
+
+    lint_nodes(&element.children, errors);
+}
+
+fn lint_number(element: &TplElement, name: &str, errors: &mut Vec<String>) {
+    let Some(raw) = element.attr(name) else {
+        return;
+    };
+    if expression(raw).is_none() && raw.trim().parse::<f64>().is_err() {
+        errors.push(format!(
+            "<{}> attribute `{name}` expects a number or {{expression}}, got `{raw}`",
+            element.tag
+        ));
+    }
+}
+
+fn lint_enum(element: &TplElement, name: &str, allowed: &[&str], errors: &mut Vec<String>) {
+    let Some(raw) = element.attr(name) else {
+        return;
+    };
+    if expression(raw).is_none() && !allowed.contains(&raw.trim()) {
+        errors.push(format!(
+            "<{}> attribute `{name}` must be one of {}, got `{raw}`",
+            element.tag,
+            allowed.join(", ")
+        ));
+    }
+}
+
+fn table_values(table: &Table) -> Result<Vec<Value>> {
+    let length = table.raw_len();
+    if length > 0 {
+        let mut out = Vec::with_capacity(length);
+        for index in 1..=length {
+            out.push(table.raw_get(index)?);
+        }
+        Ok(out)
+    } else {
+        let pairs = table
+            .pairs::<Value, Value>()
+            .collect::<mlua::Result<Vec<_>>>()?;
+        Ok(pairs.into_iter().map(|(_, value)| value).collect())
+    }
+}
+
+fn eval_list(inst: &Instance, expr: &str) -> Result<Vec<Value>> {
+    match inst.eval_value(expr)? {
+        Value::Table(table) => table_values(&table),
         _ => Ok(Vec::new()),
     }
 }
 
-fn eval_num(inst: &Instance, raw: &str) -> Result<Option<f64>> {
-    let raw = raw.trim();
-    if let Some(inner) = raw
-        .strip_prefix('{')
-        .and_then(|value| value.strip_suffix('}'))
-    {
-        return Ok(value_to_number(&inst.eval_value(inner)?));
+fn eval_options(inst: &Instance, expr: &str) -> Result<Vec<Value>> {
+    match inst.eval_value(expr)? {
+        Value::Table(table) => table_values(&table),
+        _ => bail!("options expression `{expr}` did not return a table"),
     }
-    Ok(raw.parse::<f64>().ok())
+}
+
+const ALIGN_TEXT: &[&str] = &["start", "left", "center", "end", "right"];
+const ALIGN_AXIS: &[&str] = &["start", "left", "center", "end", "right", "fill"];
+const FIT_VALUES: &[&str] = &["contain", "cover", "fill"];
+
+fn expression(raw: &str) -> Option<&str> {
+    let raw = raw.trim();
+    raw.strip_prefix('{')?.strip_suffix('}').map(str::trim)
+}
+
+fn attr_error(element: &TplElement, name: &str, expected: &str, raw: &str) -> anyhow::Error {
+    anyhow!(
+        "<{}> attribute `{name}` expects {expected}, got `{raw}`",
+        element.tag
+    )
+}
+
+fn eval_num(inst: &Instance, raw: &str) -> Result<f64> {
+    let raw = raw.trim();
+    if let Some(inner) = expression(raw) {
+        return match inst.eval_value(inner)? {
+            Value::Integer(integer) => Ok(integer as f64),
+            Value::Number(number) => Ok(number),
+            _ => bail!("numeric expression `{raw}` did not return a number"),
+        };
+    }
+
+    raw.parse::<f64>()
+        .map_err(|_| anyhow!("expected a number or {{expression}}, got `{raw}`"))
 }
 
 fn number_attr(inst: &Instance, element: &TplElement, name: &str) -> Result<Option<f64>> {
-    match element.attr(name) {
-        Some(raw) => eval_num(inst, raw),
-        None => Ok(None),
+    element
+        .attr(name)
+        .map(|raw| {
+            eval_num(inst, raw)
+                .map_err(|error| anyhow!("<{}> attribute `{name}`: {error}", element.tag))
+        })
+        .transpose()
+}
+
+fn eval_string_value(inst: &Instance, raw: &str) -> Result<String> {
+    let Some(inner) = expression(raw) else {
+        return Ok(raw.to_string());
+    };
+
+    let value = inst.eval_value(inner)?;
+    match &value {
+        Value::Nil => Ok(String::new()),
+        Value::Boolean(_) | Value::Integer(_) | Value::Number(_) | Value::String(_) => {
+            Ok(value_to_string(&value))
+        }
+        _ => bail!("string expression `{raw}` did not return a scalar value"),
+    }
+}
+
+fn string_attr(inst: &Instance, element: &TplElement, name: &str) -> Result<Option<String>> {
+    element
+        .attr(name)
+        .map(|raw| {
+            eval_string_value(inst, raw)
+                .map_err(|error| anyhow!("<{}> attribute `{name}`: {error}", element.tag))
+        })
+        .transpose()
+}
+
+fn enum_attr(
+    inst: &Instance,
+    element: &TplElement,
+    name: &str,
+    allowed: &[&str],
+) -> Result<Option<String>> {
+    let Some(value) = string_attr(inst, element, name)? else {
+        return Ok(None);
+    };
+
+    if allowed.contains(&value.as_str()) {
+        Ok(Some(value))
+    } else {
+        bail!(
+            "<{}> attribute `{name}` must be one of {}, got `{value}`",
+            element.tag,
+            allowed.join(", ")
+        )
+    }
+}
+
+fn eval_bool_value(inst: &Instance, inner: &str) -> Result<bool> {
+    match inst.eval_value(inner)? {
+        Value::Nil => Ok(false),
+        Value::Boolean(value) => Ok(value),
+        _ => bail!("boolean expression `{inner}` must return true, false, or nil"),
+    }
+}
+
+fn bool_attr(inst: &Instance, element: &TplElement, name: &str) -> Result<Option<bool>> {
+    let Some(raw) = element.attr(name) else {
+        return Ok(None);
+    };
+
+    if let Some(inner) = expression(raw) {
+        eval_bool_value(inst, inner).map(Some)
+    } else {
+        match raw.trim() {
+            "true" => Ok(Some(true)),
+            "false" => Ok(Some(false)),
+            _ => Err(attr_error(
+                element,
+                name,
+                "true, false, or {expression}",
+                raw,
+            )),
+        }
+    }
+}
+
+fn static_bool_attr(element: &TplElement, name: &str) -> Result<bool> {
+    let Some(raw) = element.attr(name) else {
+        return Ok(false);
+    };
+
+    if expression(raw).is_some() {
+        bail!(
+            "<{}> attribute `{name}` does not accept expressions",
+            element.tag
+        );
+    }
+
+    match raw.trim() {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(attr_error(element, name, "true or false", raw)),
     }
 }
 
@@ -1467,16 +1711,6 @@ fn value_to_string(value: &Value) -> String {
     }
 }
 
-fn value_to_number(value: &Value) -> Option<f64> {
-    match value {
-        Value::Integer(integer) => Some(*integer as f64),
-        Value::Number(number) => Some(*number),
-        Value::String(string) => string.to_string_lossy().parse().ok(),
-        Value::Boolean(boolean) => Some(if *boolean { 1.0 } else { 0.0 }),
-        _ => None,
-    }
-}
-
 fn format_number(number: f64) -> String {
     if number.fract() == 0.0 && number.abs() < 1e15 {
         format!("{}", number as i64)
@@ -1485,12 +1719,31 @@ fn format_number(number: f64) -> String {
     }
 }
 
-fn parse_align(value: &str) -> gtk::Align {
+fn parse_align(value: &str) -> Result<gtk::Align> {
     match value {
-        "start" | "left" => gtk::Align::Start,
-        "end" | "right" => gtk::Align::End,
-        "center" => gtk::Align::Center,
-        _ => gtk::Align::Fill,
+        "start" | "left" => Ok(gtk::Align::Start),
+        "end" | "right" => Ok(gtk::Align::End),
+        "center" => Ok(gtk::Align::Center),
+        "fill" => Ok(gtk::Align::Fill),
+        _ => bail!("unknown alignment `{value}`"),
+    }
+}
+
+fn parse_xalign(value: &str) -> Result<f32> {
+    match value {
+        "start" | "left" => Ok(0.0),
+        "center" => Ok(0.5),
+        "end" | "right" => Ok(1.0),
+        _ => bail!("unknown text alignment `{value}`"),
+    }
+}
+
+fn parse_fit(value: &str) -> Result<gtk::ContentFit> {
+    match value {
+        "contain" => Ok(gtk::ContentFit::Contain),
+        "cover" => Ok(gtk::ContentFit::Cover),
+        "fill" => Ok(gtk::ContentFit::Fill),
+        _ => bail!("unknown image fit `{value}`"),
     }
 }
 
@@ -1526,4 +1779,51 @@ fn widget_center(widget: &gtk::Widget) -> (f64, f64) {
             )
         })
         .unwrap_or((0.0, 0.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn distinguishes_expressions_from_templates() {
+        assert_eq!(expression("{count > 0}"), Some("count > 0"));
+        assert_eq!(expression("CPU: {cpu}%"), None);
+        assert_eq!(expression("true"), None);
+    }
+
+    #[test]
+    fn validates_strict_attribute_forms() {
+        let nodes = crate::template::parse(
+            r#"<box>
+                <label visible="{count > 0}" text="CPU: {cpu}%" />
+                <select options="{models}" selected="{model}" />
+                <bar value="{cpu}" max="100" />
+                <image fit="cover" />
+            </box>"#,
+        )
+        .unwrap();
+        assert!(lint_template(&nodes).is_empty());
+    }
+
+    #[test]
+    fn rejects_bare_expressions() {
+        let nodes = crate::template::parse(
+            r#"<box>
+                <label visible="count > 0" />
+                <select options="models" selected="model" />
+                <bar value="cpu" />
+                <label markdown="{is_markdown}" />
+                <label align="middle" />
+            </box>"#,
+        )
+        .unwrap();
+        let errors = lint_template(&nodes);
+        for name in ["visible", "options", "value", "markdown", "align"] {
+            assert!(
+                errors.iter().any(|error| error.contains(name)),
+                "missing error for {name}: {errors:?}"
+            );
+        }
+    }
 }
