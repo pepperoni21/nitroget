@@ -813,6 +813,7 @@ fn build_element(inst: &mut Instance, element: &TplElement) -> Result<RNode> {
             let wrapped = element.attr("width").is_some() && element.attr("height").is_some();
             let widget: gtk::Widget = if wrapped {
                 let clip = crate::clip::Clip::new();
+                clip.set_fixed_child(true);
                 clip.set_child(&picture);
                 clip.upcast()
             } else {

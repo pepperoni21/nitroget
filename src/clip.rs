@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use gtk::glib;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
@@ -6,7 +8,9 @@ mod imp {
     use super::*;
 
     #[derive(Default)]
-    pub struct Clip;
+    pub struct Clip {
+        pub fixed_child: Cell<bool>,
+    }
 
     #[glib::object_subclass]
     impl ObjectSubclass for Clip {
@@ -34,9 +38,35 @@ mod imp {
         }
 
         fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
-            if let Some(child) = self.obj().first_child() {
-                child.allocate(width, height, baseline, None);
-            }
+            let Some(child) = self.obj().first_child() else {
+                return;
+            };
+
+            let (child_width, child_height) = if self.fixed_child.get() {
+                let (requested_width, requested_height) = self.obj().size_request();
+                (
+                    if requested_width >= 0 {
+                        requested_width
+                    } else {
+                        width
+                    },
+                    if requested_height >= 0 {
+                        requested_height
+                    } else {
+                        height
+                    },
+                )
+            } else {
+                (width, height)
+            };
+
+            let x = (width - child_width) / 2;
+            let y = (height - child_height) / 2;
+            let transform = (x != 0 || y != 0).then(|| {
+                gtk::gsk::Transform::new().translate(&gtk::graphene::Point::new(x as f32, y as f32))
+            });
+
+            child.allocate(child_width, child_height, baseline, transform);
         }
 
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
@@ -56,6 +86,11 @@ glib::wrapper! {
 impl Clip {
     pub fn new() -> Self {
         glib::Object::builder().build()
+    }
+
+    pub fn set_fixed_child(&self, fixed: bool) {
+        self.imp().fixed_child.set(fixed);
+        self.queue_resize();
     }
 
     pub fn set_child(&self, child: &impl IsA<gtk::Widget>) {

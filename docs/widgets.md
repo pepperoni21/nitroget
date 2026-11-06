@@ -403,8 +403,8 @@ cached, so updating other parts of the widget does not reload the file.
 | `fit` | `contain` | `contain`, `cover`, `fill`; literal or expression |
 
 When both `width` and `height` are set, the image is rendered in exactly that
-box and scaled according to `fit`. With only one dimension, the other follows
-the image’s natural size.
+box, centered inside its parent, and scaled according to `fit`. With only one
+dimension, the other follows the image’s natural size.
 
 ### `spacer` and `sep`
 
