@@ -57,5 +57,31 @@ fn fingerprint(target: Option<&Path>, config_path: &Path) -> u64 {
         Err(_) => hash.write(b"<no-config>"),
     }
 
+    let mut roots = Vec::new();
+    match target {
+        Some(path) if path.is_dir() => roots.push(path.to_path_buf()),
+        Some(path) => {
+            if let Some(parent) = path.parent() {
+                roots.push(parent.to_path_buf());
+            }
+        }
+        None => {}
+    }
+    if let Some(parent) = config_path.parent() {
+        roots.push(parent.to_path_buf());
+    }
+    roots.sort();
+    roots.dedup();
+
+    for root in roots {
+        hash.write(root.to_string_lossy().as_bytes());
+        hash.write_u128(
+            crate::discovery::css_mtime(&root)
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos(),
+        );
+    }
+
     hash.finish()
 }

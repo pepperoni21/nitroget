@@ -131,10 +131,18 @@ pub fn mtime_of(path: &Path) -> SystemTime {
 }
 
 pub fn lua_mtime(dir: &Path) -> SystemTime {
-    lua_mtime_at(dir, 0)
+    extension_mtime(dir, "lua")
 }
 
-fn lua_mtime_at(dir: &Path, depth: usize) -> SystemTime {
+pub fn css_mtime(dir: &Path) -> SystemTime {
+    extension_mtime(dir, "css")
+}
+
+fn extension_mtime(dir: &Path, extension: &str) -> SystemTime {
+    extension_mtime_at(dir, extension, 0)
+}
+
+fn extension_mtime_at(dir: &Path, extension: &str, depth: usize) -> SystemTime {
     if depth > 8 {
         return UNIX_EPOCH;
     }
@@ -151,8 +159,8 @@ fn lua_mtime_at(dir: &Path, depth: usize) -> SystemTime {
         let path = entry.path();
 
         if file_type.is_dir() {
-            newest = newest.max(lua_mtime_at(&path, depth + 1));
-        } else if file_type.is_file() && path.extension().is_some_and(|ext| ext == "lua") {
+            newest = newest.max(extension_mtime_at(&path, extension, depth + 1));
+        } else if file_type.is_file() && path.extension().is_some_and(|ext| ext == extension) {
             newest = newest.max(mtime_of(&path));
         }
     }
@@ -225,6 +233,20 @@ mod tests {
         assert_eq!(config_path_for(&dir), dir.join("config.toml"));
         assert_eq!(config_path_for(&file), dir.join("config.toml"));
 
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn css_mtime_includes_nested_css_files() {
+        let dir = std::env::temp_dir().join(format!("nitroget-css-mtime-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let theme = dir.join("theme");
+        std::fs::create_dir_all(&theme).unwrap();
+
+        let css = theme.join("shared.css");
+        std::fs::write(&css, ".card {}").unwrap();
+
+        assert_eq!(css_mtime(&dir), mtime_of(&css));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
