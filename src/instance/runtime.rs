@@ -3,7 +3,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -186,6 +186,37 @@ fn configure_package(lua: &Lua, dirs: &[PathBuf]) -> mlua::Result<()> {
     Ok(())
 }
 
+fn valid_json_value(lua: &Lua, value: Value) -> mlua::Result<Value> {
+    fn clean(lua: &Lua, value: Value, depth: usize) -> mlua::Result<Value> {
+        if depth > 128 {
+            return Err(mlua::Error::runtime("JSON value is nested too deeply"));
+        }
+
+        match value {
+            Value::String(text) => {
+                let bytes = text.as_bytes();
+                if std::str::from_utf8(&bytes).is_ok() {
+                    Ok(Value::String(text))
+                } else {
+                    let text = String::from_utf8_lossy(&bytes);
+                    Ok(Value::String(lua.create_string(text.as_bytes())?))
+                }
+            }
+            Value::Table(table) => {
+                let cleaned = lua.create_table()?;
+                for pair in table.pairs::<Value, Value>() {
+                    let (key, item) = pair?;
+                    cleaned.set(clean(lua, key, depth + 1)?, clean(lua, item, depth + 1)?)?;
+                }
+                Ok(Value::Table(cleaned))
+            }
+            value => Ok(value),
+        }
+    }
+
+    clean(lua, value, 0)
+}
+
 pub struct TimerEntry {
     pub source: gtk::glib::SourceId,
     pub once: bool,
@@ -284,7 +315,12 @@ impl WidgetRuntime {
         *self.click_output.borrow_mut() = None;
         self.paused = false;
 
-        self.register_lua(&comp.lua_dirs)?;
+        let widget_dir = comp
+            .path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        self.register_lua(&comp.lua_dirs, widget_dir)?;
 
         if let Err(e) = self.lua.load(&comp.script).set_name("script").exec() {
             self.error = Some(format!("script error in {}: {e}", comp.path.display()));
@@ -294,12 +330,13 @@ impl WidgetRuntime {
         Ok(())
     }
 
-    fn register_lua(&mut self, dirs: &[PathBuf]) -> Result<()> {
+    fn register_lua(&mut self, dirs: &[PathBuf], widget_dir: &Path) -> Result<()> {
         let lua = &self.lua;
         configure_package(lua, dirs)?;
         let nt = lua.create_table()?;
         let outputs = lua.create_table()?;
         nt.set("outputs", outputs.clone())?;
+        nt.set("dir", widget_dir.to_string_lossy().to_string())?;
         self.outputs = Some(outputs);
 
         {
@@ -495,6 +532,7 @@ impl WidgetRuntime {
         nt.set(
             "json_encode",
             lua.create_function(|lua, value: Value| {
+                let value = valid_json_value(lua, value)?;
                 let json: serde_json::Value = lua
                     .from_value(value)
                     .map_err(|e| mlua::Error::runtime(format!("cannot encode JSON: {e}")))?;
@@ -1045,6 +1083,46 @@ mod tests {
         runtime.clear_output_context().unwrap();
         let cleared: bool = runtime.lua.load("return output == nil").eval().unwrap();
         assert!(cleared);
+    }
+
+    #[test]
+    fn exposes_widget_directory() {
+        let dir = std::env::temp_dir().join(format!("nitroget-dir-{}", std::process::id()));
+        let path = dir.join("w.nitroget");
+        let comp =
+            crate::component::parse("<widget name=\"w\"><label>x</label></widget>", &path).unwrap();
+        let (tx, _rx) = async_channel::unbounded();
+        let runtime = WidgetRuntime::new(comp, path, SystemTime::now(), tx).unwrap();
+
+        let value: String = runtime.lua.load("return nitroget.dir").eval().unwrap();
+        assert_eq!(value, dir.to_string_lossy());
+    }
+
+    #[test]
+    fn json_encode_replaces_invalid_utf8() {
+        let comp = crate::component::parse(
+            "<widget name=\"w\"><label>x</label></widget>",
+            Path::new("w.nitroget"),
+        )
+        .unwrap();
+        let (tx, _rx) = async_channel::unbounded();
+        let runtime =
+            WidgetRuntime::new(comp, PathBuf::from("w.nitroget"), SystemTime::now(), tx).unwrap();
+
+        let encoded: String = runtime
+            .lua
+            .load(
+                r#"return nitroget.json_encode({
+                    text = "before " .. string.char(0xff) .. " after",
+                    nested = { string.char(0xfe) },
+                })"#,
+            )
+            .eval()
+            .unwrap();
+        let decoded: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+
+        assert_eq!(decoded["text"].as_str().unwrap(), "before \u{fffd} after");
+        assert_eq!(decoded["nested"][0].as_str().unwrap(), "\u{fffd}");
     }
 
     #[test]

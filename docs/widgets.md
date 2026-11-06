@@ -529,6 +529,7 @@ file in the widget folder reloads the widget.
 | `nitroget.log(msg)` | print to the terminal |
 | `nitroget.quit()` | stop the daemon |
 | `nitroget.version` | engine version string |
+| `nitroget.dir` | path to the widget folder |
 
 ### Menus
 
@@ -673,7 +674,8 @@ started. A command started inside an `every_output` callback can therefore use
 
 ### JSON
 
-`nitroget.json_encode(value)` converts Lua values to JSON text.
+`nitroget.json_encode(value)` converts Lua values to JSON text. Invalid UTF-8
+in strings is replaced with the Unicode replacement character before encoding.
 `nitroget.json_decode(text)` converts JSON text back to Lua values. Lua arrays
 with integer keys `1..n` become JSON arrays; string-keyed tables become objects.
 Invalid JSON raises a Lua error, so use `pcall` when decoding external input.
@@ -687,7 +689,8 @@ Streams are stopped when the widget reloads, is parked, or calls
 `nitroget.clear(id)`.
 
 `on_line` and `on_done` run on the main thread, so they can update widget
-globals directly.
+globals directly. UI renders are coalesced during high-frequency output; every
+line still runs its callback.
 
 ### Updating data
 
