@@ -402,6 +402,10 @@ cached, so updating other parts of the widget does not reload the file.
 | `src` | | file path template |
 | `fit` | `contain` | `contain`, `cover`, `fill`; literal or expression |
 
+When both `width` and `height` are set, the image is rendered in exactly that
+box and scaled according to `fit`. With only one dimension, the other follows
+the image’s natural size.
+
 ### `spacer` and `sep`
 
 `spacer` expands to fill available space. Add `vertical="true"` to also expand

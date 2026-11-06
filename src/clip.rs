@@ -71,3 +71,24 @@ impl Default for Clip {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn size_request_produces_exact_measure() {
+        if gtk::init().is_err() {
+            return;
+        }
+
+        let clip = Clip::new();
+        clip.set_size_request(20, 12);
+
+        let horizontal = clip.measure(gtk::Orientation::Horizontal, -1);
+        let vertical = clip.measure(gtk::Orientation::Vertical, -1);
+
+        assert_eq!((horizontal.0, horizontal.1), (20, 20));
+        assert_eq!((vertical.0, vertical.1), (12, 12));
+    }
+}

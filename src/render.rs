@@ -115,6 +115,7 @@ pub struct RElement {
     visible: bool,
     tooltip_expr: Option<String>,
     tooltip: String,
+    style_target: Option<gtk::Widget>,
 }
 
 enum RKind {
@@ -147,6 +148,7 @@ enum RKind {
         picture: gtk::Picture,
         src: String,
         last: String,
+        wrapped: bool,
     },
     Entry {
         entry: gtk::Entry,
@@ -243,7 +245,9 @@ impl RElement {
                 }
             }
 
-            RKind::Image { picture, src, last } => {
+            RKind::Image {
+                picture, src, last, ..
+            } => {
                 let path = inst.interp(src)?;
                 if path != *last {
                     set_picture(inst, picture, &path);
@@ -332,14 +336,15 @@ impl RElement {
             let value = inst.interp(expr)?;
             let classes: Vec<String> = value.split_whitespace().map(str::to_string).collect();
             if classes != self.classes {
+                let styled = self.style_target.as_ref().unwrap_or(&self.widget);
                 for old in &self.classes {
                     if !classes.contains(old) {
-                        self.widget.remove_css_class(old);
+                        styled.remove_css_class(old);
                     }
                 }
                 for class in &classes {
                     if !self.classes.contains(class) {
-                        self.widget.add_css_class(class);
+                        styled.add_css_class(class);
                     }
                 }
                 self.classes = classes;
@@ -805,12 +810,22 @@ fn build_element(inst: &mut Instance, element: &TplElement) -> Result<RNode> {
             picture.set_can_shrink(true);
             set_picture(inst, &picture, &path);
 
+            let wrapped = element.attr("width").is_some() && element.attr("height").is_some();
+            let widget: gtk::Widget = if wrapped {
+                let clip = crate::clip::Clip::new();
+                clip.set_child(&picture);
+                clip.upcast()
+            } else {
+                picture.clone().upcast()
+            };
+
             (
-                picture.clone().upcast(),
+                widget,
                 RKind::Image {
                     picture,
                     src,
                     last: path,
+                    wrapped,
                 },
                 Vec::new(),
             )
@@ -1017,7 +1032,15 @@ fn build_element(inst: &mut Instance, element: &TplElement) -> Result<RNode> {
         }
     };
 
-    apply_common(inst, &widget, element, &mut common)?;
+    let style_target = match &kind {
+        RKind::Image {
+            picture,
+            wrapped: true,
+            ..
+        } => Some(picture.clone().upcast()),
+        _ => None,
+    };
+    apply_common(inst, &widget, element, &mut common, style_target.as_ref())?;
 
     Ok(RNode::Element(RElement {
         widget,
@@ -1029,6 +1052,7 @@ fn build_element(inst: &mut Instance, element: &TplElement) -> Result<RNode> {
         visible: common.visible,
         tooltip_expr: common.tooltip_expr,
         tooltip: common.tooltip,
+        style_target,
     }))
 }
 
@@ -1047,21 +1071,23 @@ fn apply_common(
     widget: &gtk::Widget,
     element: &TplElement,
     common: &mut Common,
+    style_target: Option<&gtk::Widget>,
 ) -> Result<()> {
-    widget.add_css_class(&element.tag);
+    let styled = style_target.unwrap_or(widget);
+    styled.add_css_class(&element.tag);
 
     if let Some(raw) = element.attr("class") {
         let value = inst.interp(raw)?;
         let classes: Vec<String> = value.split_whitespace().map(str::to_string).collect();
         for class in &classes {
-            widget.add_css_class(class);
+            styled.add_css_class(class);
         }
         common.class_expr = Some(raw.to_string());
         common.classes = classes;
     }
 
     if let Some(id) = string_attr(inst, element, "id")? {
-        widget.set_widget_name(&id);
+        styled.set_widget_name(&id);
     }
 
     let width = number_attr(inst, element, "width")?.map(|value| value as i32);
