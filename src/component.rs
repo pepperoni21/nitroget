@@ -163,10 +163,7 @@ pub fn parse(src: &str, path: &Path) -> Result<Component> {
         }
         None => (String::new(), None, src.to_string()),
     };
-    let (css, src) = match extract_block(&src, "style") {
-        Some(block) => (block.body, block.rest),
-        None => (String::new(), src),
-    };
+    let (css, src) = extract_style_blocks(src, path)?;
 
     let root_dir = widget_dir(path);
     let mut lua_dirs = script_dir.into_iter().collect::<Vec<_>>();
@@ -360,6 +357,33 @@ pub fn is_valid_layer(layer: &str) -> bool {
     ["background", "bottom", "top", "overlay"].contains(&layer.trim().to_lowercase().as_str())
 }
 
+fn extract_style_blocks(mut src: String, path: &Path) -> Result<(String, String)> {
+    let mut css = String::new();
+
+    while let Some(block) = extract_block(&src, "style") {
+        if let Some(style_src) = attr_value(&block.attrs, "src") {
+            if !block.body.trim().is_empty() {
+                bail!("<style src=\"{style_src}\"> cannot also contain inline CSS");
+            }
+            let file = resolve_style(&style_src, path)?;
+            let content = std::fs::read_to_string(&file)
+                .with_context(|| format!("cannot read stylesheet {}", file.display()))?;
+            if !css.is_empty() {
+                css.push('\n');
+            }
+            css.push_str(&content);
+        } else {
+            if !css.is_empty() {
+                css.push('\n');
+            }
+            css.push_str(&block.body);
+        }
+        src = block.rest;
+    }
+
+    Ok((css, src))
+}
+
 struct Block {
     attrs: String,
     body: String,
@@ -518,6 +542,44 @@ fn resolve_script(value: &str, path: &Path) -> Result<PathBuf> {
     Ok(file)
 }
 
+fn resolve_style(value: &str, path: &Path) -> Result<PathBuf> {
+    let value = value.trim();
+    if value.is_empty() {
+        bail!("<style src> is empty");
+    }
+
+    let relative = Path::new(value);
+    if relative.is_absolute() {
+        bail!("<style src> must be relative to the widget file");
+    }
+    for component in relative.components() {
+        match component {
+            std::path::Component::Normal(_)
+            | std::path::Component::CurDir
+            | std::path::Component::ParentDir => {}
+            _ => bail!("<style src> must stay relative to the widget file"),
+        }
+    }
+
+    let file = widget_dir(path).join(relative);
+    let meta = std::fs::symlink_metadata(&file)
+        .with_context(|| format!("cannot inspect stylesheet {}", file.display()))?;
+    if meta.file_type().is_symlink() {
+        bail!("{} is a symlink; refusing to load it", file.display());
+    }
+    if !meta.file_type().is_file() {
+        bail!("{} is not a regular file", file.display());
+    }
+    if meta.len() > MAX_COMPONENT_BYTES {
+        bail!(
+            "{} is too large (limit {MAX_COMPONENT_BYTES} bytes)",
+            file.display()
+        );
+    }
+
+    Ok(file)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -613,6 +675,54 @@ mod tests {
                 .contains("cannot also contain inline code")
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn loads_external_styles_and_keeps_order() {
+        let dir = temp_dir("external-style");
+        std::fs::write(dir.join("theme.css"), ".external { color: green; }").unwrap();
+        let path = dir.join("widget.nitroget");
+        let comp = parse(
+            "<widget name=\"widget\"></widget>\n<style>.first { color: red; }</style>\n<style src=\"theme.css\" />\n<style>.last { color: blue; }</style>",
+            &path,
+        )
+        .unwrap();
+
+        assert!(comp.css.find(".first").unwrap() < comp.css.find(".external").unwrap());
+        assert!(comp.css.find(".external").unwrap() < comp.css.find(".last").unwrap());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn rejects_inline_css_with_external_style() {
+        let dir = temp_dir("inline-and-style");
+        std::fs::write(dir.join("theme.css"), ".external { color: green; }").unwrap();
+        let path = dir.join("widget.nitroget");
+        let error = parse(
+            "<widget name=\"widget\"></widget>\n<style src=\"theme.css\">.inline { color: red; }</style>",
+            &path,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("cannot also contain inline CSS"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn allows_shared_stylesheet_outside_widget_folder() {
+        let root = temp_dir("shared-style");
+        let widgets = root.join("widgets");
+        std::fs::create_dir_all(&widgets).unwrap();
+        std::fs::write(root.join("theme.css"), ".shared { color: green; }").unwrap();
+        let path = widgets.join("widget.nitroget");
+        let comp = parse(
+            "<widget name=\"widget\"></widget>\n<style src=\"../theme.css\" />",
+            &path,
+        )
+        .unwrap();
+
+        assert!(comp.css.contains(".shared"));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

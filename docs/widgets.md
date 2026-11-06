@@ -475,6 +475,33 @@ bar trough { /* progress bar track */ }
 
 `:host` and `widget` refer to the widget root.
 
+### External and shared stylesheets
+
+Use `<style src="...">` to load CSS from a file:
+
+```html
+<style src="../theme.css" />
+
+<style>
+  .card {
+    padding: 10px;
+  }
+</style>
+```
+
+Paths are relative to the widget file and may point outside the widget folder
+for a shared theme. External CSS is read at load and scoped exactly like inline
+CSS. Multiple style blocks are concatenated in source order, so a shared theme
+can precede or follow widget-specific rules.
+
+`<style src>` cannot also contain inline CSS. Symlinked stylesheets are
+rejected, and stylesheet files under the widget root are watched for reloads.
+Use `<style src>` instead of `@import`; `@import` rules are not scoped by the
+engine.
+
+`@define-color` at-rules remain global to the display. Use a unique prefix for
+shared palette names to avoid collisions between themes.
+
 ### Following the GTK theme
 
 Standard controls such as `button`, `label` and `slider` already use the current
