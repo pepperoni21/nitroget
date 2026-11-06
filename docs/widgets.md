@@ -402,7 +402,6 @@ cached, so updating other parts of the widget does not reload the file.
 | `src` | | file path template |
 | `fit` | `contain` | `contain`, `cover`, `fill`; literal or expression |
 
-
 ### `spacer` and `sep`
 
 `spacer` expands to fill available space. Add `vertical="true"` to also expand
