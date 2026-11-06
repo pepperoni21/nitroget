@@ -7,7 +7,9 @@ use crate::instance::Instance;
 
 impl Instance {
     pub(super) fn apply_css(&mut self) -> Result<()> {
-        let scoped = crate::css::scope(&self.comp.css, &self.scope_class());
+        let scope = self.scope_class();
+        self.window.add_css_class(&scope);
+        let scoped = crate::css::scope(&self.comp.css, &scope);
         let full = format!(
             "window.nitroget {{ background-color: transparent; }}\n\
              window.nitroget.nitroget-parked {{ background-color: rgba(0, 0, 0, 0.004); }}\n\
