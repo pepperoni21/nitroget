@@ -4,7 +4,7 @@
       <label class="title">Ollama</label>
       <spacer />
       {#if ready and #models > 0}
-        <select class="models" options="models" selected="model" on:change="choose_model(event.value)" />
+        <select class="models" options="{models}" selected="{model}" on:change="choose_model(event.value)" />
       {/if}
     </row>
 
